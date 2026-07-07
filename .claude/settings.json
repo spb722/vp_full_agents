@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Skill",
+      "Read",
+      "Agent",
+      "mcp__vp__*"
+    ],
+    "deny": [
+      "Bash"
+    ]
+  }
+}

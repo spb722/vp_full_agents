@@ -1,0 +1,30 @@
+[project]
+name = "vp-agent"
+version = "0.1.0"
+description = "Virtual Profile Builder using Claude Agent SDK"
+requires-python = ">=3.11"
+dependencies = [
+  "claude-agent-sdk>=0.1.60",
+  "fastapi>=0.111",
+  "langfuse>=3.0",
+  "openinference-instrumentation-claude-agent-sdk>=0.1.0",
+  "opentelemetry-exporter-otlp-proto-http>=1.30",
+  "opentelemetry-sdk>=1.30",
+  "python-dotenv>=1.0",
+  "uvicorn[standard]>=0.30",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["vp_agent*"]
+
+[project.scripts]
+vp-agent = "vp_agent.cli:main"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
