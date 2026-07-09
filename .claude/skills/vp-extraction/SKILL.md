@@ -22,7 +22,8 @@ Required fields:
   or `none`.
 - `operator`: normalized comparison from the user intent, such as `>`, `>=`,
   `=`, `<`, `<=`, `IN`, or `unknown`.
-- `value`: the threshold or category value from the user request.
+- `value`: the threshold or category value from the user request, or empty when
+  the main KPI should keep runtime placeholders.
 - `filters`: every non-main-KPI constraint as plain objects with `phrase`,
   `operator`, and `value`.
 - `negations`: explicit negative constraints.
@@ -30,7 +31,18 @@ Required fields:
 - `questions`: one batched list of plain-English questions when clarification
   is needed.
 
-If the sentence omits a timeframe for an event or aggregate KPI, mark
+If the main KPI omits a timeframe for an event or aggregate KPI, mark
 `needs_clarification=true` unless the wrapper has provided a default.
+
+For filter KPIs with explicit fixed values, do not ask immediately only because
+the filter period is missing. First resolve via retrieved metadata, Customer
+360/profile snapshots, golden examples, or production defaults. Ask
+clarification only if no clear default or multiple conflicting periods remain.
+
+If the main KPI omits a comparison threshold, do not ask clarification for that
+alone. Normal VP rules preserve `${operator} ${value}` as runtime placeholders.
+Values stated in the request for non-main KPIs are fixed filter predicates, such
+as recharge amount > 100 or roaming revenue >= 5000. Ask clarification only when
+a filter needs a concrete value or the business meaning is ambiguous.
 
 Do not expose column names or table names in clarification questions.

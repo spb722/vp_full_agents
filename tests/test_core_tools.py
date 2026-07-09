@@ -38,6 +38,9 @@ def test_orchestrator_requires_render_pipeline_and_disallows_bash():
     assert "mcp__vp__render_condition" in ORCHESTRATOR_APPEND
     assert "Do not produce a final answer before this" in ORCHESTRATOR_APPEND
     assert "Missing comparison threshold is not by itself a clarification" in ORCHESTRATOR_APPEND
+    assert "Values stated in the request for non-main KPIs are fixed filters" in ORCHESTRATOR_APPEND
+    assert "Do not ask clarification for a missing filter" in ORCHESTRATOR_APPEND
+    assert '"high value customer"' in ORCHESTRATOR_APPEND
     assert "Do not search" in ORCHESTRATOR_APPEND
 
     options = build_options()
@@ -151,11 +154,24 @@ def test_api_request_id_generation_and_session_default():
 
 
 def test_api_extracts_parent_condition_from_agent_text():
-    from vp_agent.api import _extract_parent_condition
+    from vp_agent.api import _extract_explicit_parent_condition
 
     text = "Done.\nPARENT_CONDITION: CUST_360_RECHARGE_AMOUNT_30D ${operator} ${value}"
 
-    assert _extract_parent_condition(text) == "CUST_360_RECHARGE_AMOUNT_30D ${operator} ${value}"
+    assert _extract_explicit_parent_condition(text) == "CUST_360_RECHARGE_AMOUNT_30D ${operator} ${value}"
+
+
+def test_api_extracts_aggregate_parent_condition_from_agent_text():
+    from vp_agent.api import _extract_explicit_parent_condition
+
+    condition = (
+        'Profile_Cdr_Handset_Type = "SP" AND Profile_Line_Type = "PREPAID" '
+        "AND COMMON_Event_Date >= CurrentTime-7DAYS "
+        "AND SUM(COMMON_OG_Local_Offnet_Sms_Revenue) ${operator} ${value}"
+    )
+    text = f"**PARENT_CONDITION:**\n```\n{condition}\n```"
+
+    assert _extract_explicit_parent_condition(text) == condition
 
 
 def test_api_does_not_extract_placeholder_instruction_as_condition():
@@ -210,14 +226,15 @@ def test_api_extracts_parent_condition_from_tool_result_json():
     )
 
 
-def test_api_extracts_parent_condition_from_message_tool_block():
+def test_api_extracts_parent_condition_from_render_tool_block():
     from types import SimpleNamespace
 
-    from vp_agent.api import _message_parent_condition
+    from vp_agent.api import _message_render_parent_condition
 
     message = SimpleNamespace(
         content=[
             SimpleNamespace(
+                name="mcp__vp__render_condition",
                 content={
                     "parent_condition": 'CUST_360_HANDSET_TYPE = "SP" AND CUST_360_TOTAL_ROAMING_REV_FINANCE_REV_W4 ${operator} ${value}'
                 }
@@ -226,9 +243,90 @@ def test_api_extracts_parent_condition_from_message_tool_block():
     )
 
     assert (
-        _message_parent_condition(message)
+        _message_render_parent_condition(message)
         == 'CUST_360_HANDSET_TYPE = "SP" AND CUST_360_TOTAL_ROAMING_REV_FINANCE_REV_W4 ${operator} ${value}'
     )
+
+
+def test_api_ignores_seed_template_as_parent_condition():
+    from types import SimpleNamespace
+
+    from vp_agent.api import _message_render_parent_condition
+
+    message = SimpleNamespace(
+        content=[
+            SimpleNamespace(
+                name="mcp__vp__select_seed",
+                content={
+                    "candidates": [
+                        {
+                            "seed_id": "S60_audience_segment",
+                            "output_template": "( AS_SEGMENT_ID ${operator} ${value} AND AS_EXECUTION_COUNTER = ${SEGMENT_EXECUTION_COUNTER} )",
+                        }
+                    ]
+                },
+            )
+        ]
+    )
+
+    assert _message_render_parent_condition(message) is None
+
+
+def test_api_extracts_clarification_question():
+    from vp_agent.api import _extract_clarification_question
+
+    text = "Clarification needed:\nShould high value mean a stored customer value segment such as HIGH, or a revenue/spend threshold over the stated period?"
+
+    question = _extract_clarification_question(text, "high value customers who are smartphone users recorded in the last 30 day")
+
+    assert question.startswith("When you say high value customers")
+    assert "existing High Value segment" in question
+    assert "last 30 days" in question
+    assert "VALUE_SEGMENT" not in question
+    assert "PARENT_CONDITION" not in question
+
+
+def test_api_clarification_question_filters_internal_terms():
+    from vp_agent.api import _extract_clarification_question
+
+    text = """
+    **Clarification needed before I can render the rule:**
+    Should **"high value customer"** mean:
+    1. A stored customer value segment (e.g., `VALUE_SEGMENT_OVERALL = HIGH`), or
+    2. A revenue/spend-based KPI over a period, e.g., total revenue, ARPU, recharge amount, or CLV, with a threshold?
+    Once I have that, I'll resolve columns, pick the seed/template, and render the validated `PARENT_CONDITION`.
+    """
+
+    question = _extract_clarification_question(text, "high value customers who are smartphone users recorded in the last 30 day")
+
+    assert "VALUE_SEGMENT_OVERALL" not in question
+    assert "seed" not in question
+    assert "PARENT_CONDITION" not in question
+    assert "revenue, spend, recharge amount, ARPU, or CLV" in question
+
+
+def test_api_clarification_prefers_final_labelled_question_over_skill_examples():
+    from vp_agent.api import _extract_clarification_question
+
+    text = """
+    For "high value" ambiguity, ask in business terms, for example:
+    "Should high value mean customers in an existing High Value segment, or
+    customers whose revenue, spend, recharge amount, ARPU, or CLV crosses a
+    threshold over the stated period?"
+
+    Filter 2 ("recharged more than 100") is an aggregate/event condition with no
+    stated timeframe.
+
+    **Question:** For the "recharged more than 100" condition, what time period
+    should this recharge amount apply to - last month, last 30 days, or month
+    till date?
+    """
+
+    question = _extract_clarification_question(text, "local financial services revenue in Month till date")
+
+    assert question.startswith('For the "recharged more than 100" condition')
+    assert "threshold over the stated period" not in question
+    assert "last 30 days" in question
 
 
 def test_post_tool_hook_allows_intermediate_templates():
@@ -304,6 +402,66 @@ def test_stop_hook_allows_after_render():
     hook = make_hooks(state)["Stop"][0].hooks[0]
 
     assert asyncio.run(hook({"hook_event_name": "Stop"}, None, {"signal": None})) == {}
+
+
+def test_render_hook_stores_parent_condition():
+    from vp_agent.hooks import make_hooks
+    from vp_agent.schemas import ToolState
+
+    state = ToolState()
+    hook = make_hooks(state)["PostToolUse"][0].hooks[0]
+
+    result = asyncio.run(
+        hook(
+            {
+                "tool_name": "mcp__vp__render_condition",
+                "tool_input": {"client": "omantel"},
+                "tool_response": {
+                    "structuredContent": {
+                        "parent_condition": 'CUST_360_HANDSET_TYPE = "SP" AND VALUE_SEGMENT_OVERALL ${operator} ${value}'
+                    }
+                },
+            },
+            "tool-1",
+            {"signal": None},
+        )
+    )
+
+    assert result == {}
+    assert state.rendered_parent_condition == 'CUST_360_HANDSET_TYPE = "SP" AND VALUE_SEGMENT_OVERALL ${operator} ${value}'
+
+
+def test_render_hook_stores_parent_condition_from_text_json():
+    from vp_agent.hooks import make_hooks
+    from vp_agent.schemas import ToolState
+
+    condition = (
+        'Profile_Cdr_Handset_Type = "SP" AND Profile_Line_Type = "PREPAID" '
+        "AND COMMON_Event_Date >= CurrentTime-7DAYS "
+        "AND SUM(COMMON_OG_Local_Offnet_Sms_Revenue) ${operator} ${value}"
+    )
+    state = ToolState()
+    hook = make_hooks(state)["PostToolUse"][0].hooks[0]
+
+    result = asyncio.run(
+        hook(
+            {
+                "tool_name": "mcp__vp__render_condition",
+                "tool_input": {"client": "omantel"},
+                "tool_response": [
+                    {
+                        "type": "text",
+                        "text": json.dumps({"client": "omantel", "parent_condition": condition}),
+                    }
+                ],
+            },
+            "tool-1",
+            {"signal": None},
+        )
+    )
+
+    assert result == {}
+    assert state.rendered_parent_condition == condition
 
 
 def test_post_tool_hook_warns_for_non_render_parent_condition_without_denying():
@@ -631,6 +789,19 @@ def test_normalize_slots_for_example_sentence():
     assert slots["value"] == "5"
     assert {"phrase": "Omani nationals", "operator": "=", "value": "Omani"} in slots["filters"]
     assert {"phrase": "smartphones", "operator": "=", "value": "smartphone"} in slots["filters"]
+
+
+def test_normalize_slots_does_not_require_main_kpi_threshold():
+    sentence = "Revenue from outgoing off-net SMS for prepaid smartphone users based on events recorded in the last 7 days"
+
+    slots = normalize_slots(sentence, client="omantel")
+
+    assert slots["needs_clarification"] is False
+    assert slots["operator"] == "unknown"
+    assert slots["value"] == ""
+    assert "operator" not in slots["missing"]
+    assert "value" not in slots["missing"]
+    assert slots["time_token"] == "7D"
 
 
 def test_raw_sentence_to_parent_condition_360_path():

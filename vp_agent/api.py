@@ -45,6 +45,8 @@ class VPBuildResponse(BaseModel):
     slots: dict[str, Any] | None = None
     validation: dict[str, Any] | None = None
     raw_text: str | None = None
+    needs_clarification: bool = False
+    clarification_question: str | None = None
     failure_reason: str | None = None
     diagnostics: dict[str, Any] | None = None
     warnings: list[str] = Field(default_factory=list)
@@ -117,13 +119,19 @@ async def _build_agentic(request: VPBuildRequest, *, request_id: str | None = No
     try:
         async for message in run_request(request.sentence, request.client, state=state, stderr_callback=sdk_stderr.append):
             chunks.extend(_message_text(message))
-            parent_condition = parent_condition or _message_parent_condition(message)
+            parent_condition = _message_render_parent_condition(message) or parent_condition
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Claude Agent SDK request failed: {type(exc).__name__}: {exc}") from exc
 
     raw_text = "\n".join(chunk for chunk in chunks if chunk).strip()
-    parent_condition = parent_condition or _extract_parent_condition(raw_text)
-    failure_reason = None if parent_condition else _missing_parent_condition_reason(state, raw_text, sdk_stderr)
+    parent_condition = state.rendered_parent_condition or parent_condition or _extract_explicit_parent_condition(raw_text)
+    clarification_question = None if parent_condition else _extract_clarification_question(raw_text, request.sentence)
+    needs_clarification = bool(clarification_question)
+    failure_reason = (
+        None
+        if parent_condition
+        else "Clarification needed before rendering." if needs_clarification else _missing_parent_condition_reason(state, raw_text, sdk_stderr)
+    )
     settings = load_settings()
     if parent_condition and not state.render_seen:
         log_line(state, f"Parent condition: {parent_condition}")
@@ -141,9 +149,11 @@ async def _build_agentic(request: VPBuildRequest, *, request_id: str | None = No
         sentence=request.sentence,
         parent_condition=parent_condition,
         raw_text=raw_text or None,
+        needs_clarification=needs_clarification,
+        clarification_question=clarification_question,
         failure_reason=failure_reason,
         diagnostics=None if parent_condition else _missing_parent_condition_diagnostics(state, raw_text, sdk_stderr),
-        warnings=[] if parent_condition else _missing_parent_condition_warnings(failure_reason, state, sdk_stderr),
+        warnings=[] if parent_condition else _missing_parent_condition_warnings(failure_reason, state, sdk_stderr, clarification_question),
     )
 
 
@@ -162,21 +172,8 @@ def _message_text(message: object) -> list[str]:
     return texts
 
 
-def _message_parent_condition(message: object) -> str | None:
-    condition = _extract_parent_condition(getattr(message, "result", None))
-    if condition:
-        return condition
-
-    content = getattr(message, "content", None)
-    if content:
-        for block in content:
-            condition = _extract_parent_condition(getattr(block, "content", None))
-            if condition:
-                return condition
-            condition = _extract_parent_condition(getattr(block, "text", None))
-            if condition:
-                return condition
-    return None
+def _message_render_parent_condition(message: object) -> str | None:
+    return _extract_render_parent_condition(_to_plain_data(message))
 
 
 def _extract_parent_condition(value: Any) -> str | None:
@@ -229,12 +226,203 @@ def _extract_parent_condition(value: Any) -> str | None:
     return None
 
 
+def _extract_render_parent_condition(value: Any, in_render_tool: bool = False) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        tool_name = str(
+            value.get("tool_name")
+            or value.get("toolName")
+            or value.get("name")
+            or value.get("tool")
+            or value.get("commandName")
+            or ""
+        )
+        in_render_tool = in_render_tool or "mcp__vp__render_condition" in tool_name or tool_name == "render_condition"
+        if in_render_tool:
+            condition = _extract_parent_condition_from_key(value)
+            if condition:
+                return condition
+        for item in value.values():
+            condition = _extract_render_parent_condition(item, in_render_tool)
+            if condition:
+                return condition
+        return None
+    if isinstance(value, list):
+        for item in value:
+            condition = _extract_render_parent_condition(item, in_render_tool)
+            if condition:
+                return condition
+        return None
+    if in_render_tool and isinstance(value, str):
+        return _extract_parent_condition(value)
+    return None
+
+
+def _extract_parent_condition_from_key(value: Any) -> str | None:
+    if isinstance(value, dict):
+        condition = value.get("parent_condition")
+        if isinstance(condition, str) and condition.strip():
+            return condition.strip()
+        for item in value.values():
+            condition = _extract_parent_condition_from_key(item)
+            if condition:
+                return condition
+    elif isinstance(value, list):
+        for item in value:
+            condition = _extract_parent_condition_from_key(item)
+            if condition:
+                return condition
+    elif isinstance(value, str):
+        try:
+            parsed = json.loads(value.strip())
+        except json.JSONDecodeError:
+            return None
+        return _extract_parent_condition_from_key(parsed)
+    return None
+
+
+def _extract_explicit_parent_condition(text: str) -> str | None:
+    if not text:
+        return None
+    for line in text.splitlines():
+        if re.match(r"^\s*(?:\*\*)?\s*(?:PARENT_CONDITION|parent_condition)\s*(?:\*\*)?\s*[:=]", line, flags=re.I):
+            condition = re.sub(r"^\s*(?:\*\*)?\s*(?:PARENT_CONDITION|parent_condition)\s*(?:\*\*)?\s*[:=]\s*", "", line, flags=re.I)
+            condition = condition.strip().strip("`").strip('"')
+            if _looks_like_parent_condition(condition):
+                return condition
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        if re.search(r"\bPARENT_CONDITION\b", line, flags=re.I):
+            for candidate in lines[index + 1 : index + 5]:
+                condition = candidate.strip().strip("`").strip('"')
+                if _looks_like_parent_condition(condition):
+                    return condition
+    return None
+
+
 def _looks_like_parent_condition(condition: str) -> bool:
     if "`" in condition or condition.lstrip().startswith("-"):
         return False
     if "${operator}" not in condition or "${value}" not in condition:
         return False
-    return bool(re.search(r"\b[A-Za-z][A-Za-z0-9_]*\s+\$\{operator\}\s+\$\{value\}", condition))
+    return bool(
+        re.search(
+            r"(?:\b[A-Za-z][A-Za-z0-9_]*|\b(?:SUM|COUNT_ALL|AVG|MAX|MIN)\([^)]*\))\s+\$\{operator\}\s+\$\{value\}",
+            condition,
+            flags=re.I,
+        )
+    )
+
+
+def _extract_clarification_question(text: str, request: str = "") -> str | None:
+    if re.search(r"\bhigh[- ]?value|valuable customer|premium customer|high spender\b", request, flags=re.I):
+        return (
+            "When you say high value customers, should that mean customers in an existing High Value segment, "
+            "or customers whose revenue, spend, recharge amount, ARPU, or CLV crosses a threshold? "
+            "If it is threshold-based, please specify which measure and whether the last 30 days should apply to it."
+        )
+    if not text:
+        return None
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    explicit_question = _extract_labelled_clarification_question(lines)
+    if explicit_question:
+        return explicit_question
+    if not re.search(r"clarification|clarify|ambiguous|which|what do you mean", text, flags=re.I):
+        return None
+    search_lines = lines[-30:]
+    question_lines = [
+        _clean_clarification_line(line)
+        for line in search_lines
+        if "?" in line and not _line_has_internal_terms(line)
+    ]
+    question_lines = [line for line in question_lines if line]
+    if question_lines:
+        return _dedupe_sentences(" ".join(question_lines))[:1000]
+    for index, line in enumerate(search_lines):
+        if re.search(r"clarification needed|clarification question|please clarify", line, flags=re.I):
+            public_lines = [
+                _clean_clarification_line(item)
+                for item in search_lines[index : index + 6]
+                if not _line_has_internal_terms(item)
+            ]
+            public_lines = [line for line in public_lines if line]
+            if public_lines:
+                return _dedupe_sentences(" ".join(public_lines))[:1000]
+    return None
+
+
+def _extract_labelled_clarification_question(lines: list[str]) -> str | None:
+    for index in range(len(lines) - 1, -1, -1):
+        line = _clean_clarification_line(lines[index])
+        if not re.match(r"^(?:Question|Clarification question)\s*:", line, flags=re.I):
+            continue
+        candidate = re.sub(r"^(?:Question|Clarification question)\s*:\s*", "", line, flags=re.I).strip()
+        if "?" not in candidate:
+            following = " ".join(_clean_clarification_line(item) for item in lines[index + 1 : index + 4])
+            candidate = f"{candidate} {following}".strip()
+        if "?" in candidate and not _line_has_internal_terms(candidate):
+            return _dedupe_sentences(candidate)[:1000]
+    return None
+
+
+def _line_has_internal_terms(line: str) -> bool:
+    return bool(
+        re.search(
+            r"\b[A-Z][A-Z0-9_]{2,}\b|PARENT_CONDITION|seed|template|column|table|render|omantel",
+            line,
+        )
+    )
+
+
+def _clean_clarification_line(line: str) -> str:
+    line = line.strip()
+    line = re.sub(r"\*\*(.*?)\*\*", r"\1", line)
+    line = line.strip("-* ")
+    line = re.sub(r"^\d+\.\s*", "", line)
+    line = line.replace("`", "")
+    return line.strip()
+
+
+def _dedupe_sentences(text: str) -> str:
+    parts = re.split(r"(?<=[?.!])\s+", text.strip())
+    seen: set[str] = set()
+    result: list[str] = []
+    for part in parts:
+        key = part.lower()
+        if part and key not in seen:
+            seen.add(key)
+            result.append(part)
+    return " ".join(result)
+
+
+def _to_plain_data(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, dict):
+        return {str(key): _to_plain_data(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_to_plain_data(item) for item in value]
+    data: dict[str, Any] = {"__class__": type(value).__name__}
+    for attr in (
+        "type",
+        "name",
+        "tool_name",
+        "toolName",
+        "commandName",
+        "content",
+        "text",
+        "result",
+        "input",
+        "output",
+        "tool_response",
+        "structuredContent",
+    ):
+        if hasattr(value, attr):
+            data[attr] = _to_plain_data(getattr(value, attr))
+    if len(data) == 1:
+        return str(value)
+    return data
 
 
 def _request_id(request: VPBuildRequest) -> str:
@@ -256,8 +444,16 @@ def _missing_parent_condition_reason(state: ToolState, raw_text: str, sdk_stderr
     return "mcp__vp__render_condition ran, but the agent returned no text containing a parseable parent_condition."
 
 
-def _missing_parent_condition_warnings(failure_reason: str | None, state: ToolState, sdk_stderr: list[str]) -> list[str]:
+def _missing_parent_condition_warnings(
+    failure_reason: str | None,
+    state: ToolState,
+    sdk_stderr: list[str],
+    clarification_question: str | None = None,
+) -> list[str]:
     warnings = [failure_reason or "Agent response did not contain a parseable parent condition."]
+    if clarification_question:
+        warnings.append(clarification_question)
+        return warnings
     if state.render_seen:
         warnings.append("Check the render_condition tool output in the trace; parsing may need to be extended for the SDK message shape.")
     else:

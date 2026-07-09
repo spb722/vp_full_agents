@@ -10,12 +10,24 @@ Ask only plain-English questions. Batch related questions into one user turn.
 Ask when:
 
 - The KPI phrase maps to multiple business meanings with similar confidence.
-- An event/aggregate KPI has no timeframe and no wrapper default.
+- The main event/aggregate KPI has no timeframe and no wrapper/default period.
+- A filter KPI has no timeframe only after retrieval fails to find a clear
+  canonical snapshot/default period, or multiple period interpretations remain
+  equally plausible.
 - The user says "active" without enough context to distinguish account status,
   data activity, recharge activity, or subscription state.
+- The user says "high value", "high-value customer", "valuable customer",
+  "premium customer", "high spender", or similar business labels without saying
+  whether this means a stored value segment, revenue, ARPU, recharge amount,
+  spend, CLV, or another KPI. Do not silently map "high value customer" to a
+  value-segment column unless the user explicitly says value segment/segment.
 - The user appears to request an uplift/downlift metric but the periods or base
   KPI are missing.
 
 Do not ask the user to pick columns, groups, table names, seed IDs, or internal
 template names.
 
+For "high value" ambiguity, ask in business terms, for example:
+"Should high value mean customers in an existing High Value segment, or
+customers whose revenue, spend, recharge amount, ARPU, or CLV crosses a
+threshold over the stated period?"

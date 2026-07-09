@@ -37,8 +37,7 @@ def _find_value(text: str, operator_phrase: str | None) -> str:
     money = re.search(r"\b(-?\d+(?:\.\d+)?)\s*(?:omr|rial|rials|rs|usd|dollars?)\b", text, re.I)
     if money:
         return money.group(1)
-    number = re.search(r"\b(-?\d+(?:\.\d+)?)\b", text)
-    return number.group(1) if number else ""
+    return ""
 
 
 def _find_time_token(text: str) -> str:
@@ -119,12 +118,6 @@ def normalize_slots(request: str, client: str | None = None) -> dict[str, Any]:
         warnings.append("Could not determine KPI domain from the sentence.")
     if not kpi_phrase:
         missing.append("kpi_phrase")
-    if operator == "unknown":
-        missing.append("operator")
-        warnings.append("Could not determine comparison operator.")
-    if not value:
-        missing.append("value")
-        warnings.append("Could not determine comparison value.")
     if time_token == "none" and domain in {"recharge", "usage", "subscription"}:
         missing.append("time_token")
         warnings.append("No time window found for an event or aggregate KPI.")

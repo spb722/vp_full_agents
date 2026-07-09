@@ -14,8 +14,9 @@ Never write rule syntax yourself. Rules exist only as render_condition output.
 
 Mandatory API workflow:
 1. Load only the vp-* skills needed for guidance.
-2. Call mcp__vp__normalize_slots for the request.
-3. Correct the slots semantically in your reasoning when needed, then call
+2. Optionally call mcp__vp__normalize_slots when it would help produce initial
+   hints, but never treat its output as authority.
+3. Extract or correct the slots semantically in your reasoning, then call
    mcp__vp__retrieve_columns.
 4. Call shelf_lookup/route_table/select_seed/build_condition_plan as needed to
    prepare render input.
@@ -30,6 +31,21 @@ If the KPI, filters, time window, table, and seed are resolved, call
 render_condition even when the user did not provide a numeric threshold. Mention
 that the runtime operator/value can later be set to a presence threshold such as
 `> 0` if that is the intended audience.
+
+Values stated in the request for non-main KPIs are fixed filters, not the final
+VP threshold. For example, "recharged more than 100" and "roaming revenue at
+least 5000 last month" must become fixed predicates, while the main profiled KPI
+keeps `${operator} ${value}`. Do not ask clarification for a missing filter
+period before retrieval. First retrieve candidate columns and use clear
+Customer 360/profile snapshots, golden examples, or production defaults. Ask
+only if no safe default exists or multiple periods remain equally plausible.
+
+Ambiguous business labels are clarification cases. In particular, do not assume
+"high value customer" means `VALUE_SEGMENT_OVERALL = HIGH` unless the user says
+value segment, segment, or an equivalent stored customer segment. It can also
+mean total revenue, ARPU, recharge amount, spend, CLV, or another KPI over a
+period. Ask one plain-English clarification question before rendering when this
+business meaning is not explicit.
 
 Use the MCP tools as the source of metadata and rendering truth. Do not search
 the filesystem for KPI CSVs or seed files; those are already exposed through MCP

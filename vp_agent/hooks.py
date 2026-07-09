@@ -90,9 +90,15 @@ def make_hooks(state: ToolState):
             if tool_name == "mcp__vp__render_condition":
                 state.render_seen = True
                 structured = tool_response.get("structuredContent") if isinstance(tool_response, dict) else None
+                condition = None
                 if isinstance(structured, dict) and structured.get("parent_condition"):
+                    condition = structured["parent_condition"]
+                if not condition:
+                    condition = _extract_parent_condition(tool_response)
+                if condition:
+                    state.rendered_parent_condition = condition
                     validation = validate_rule(
-                        structured["parent_condition"],
+                        condition,
                         request=str(tool_input.get("request", "")),
                         table=str(tool_input.get("table", "")),
                     )
@@ -146,3 +152,23 @@ def _contains_final_parent_condition(value: Any) -> bool:
     if isinstance(value, list):
         return any(_contains_final_parent_condition(item) for item in value)
     return False
+
+
+def _extract_parent_condition(value: Any) -> str | None:
+    if isinstance(value, dict):
+        condition = value.get("parent_condition")
+        if isinstance(condition, str) and condition.strip():
+            return condition.strip()
+        return next((found for item in value.values() if (found := _extract_parent_condition(item))), None)
+    if isinstance(value, list):
+        return next((found for item in value if (found := _extract_parent_condition(item))), None)
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            return None
+        return _extract_parent_condition(parsed)
+    return None

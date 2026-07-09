@@ -55,6 +55,7 @@ class ToolState:
     slots_seen: bool = False
     plan_seen: bool = False
     render_seen: bool = False
+    rendered_parent_condition: str | None = None
     stop_blocks: int = 0
     subagent_counts: dict[str, int] = field(default_factory=dict)
     trace: list[dict[str, Any]] = field(default_factory=list)
