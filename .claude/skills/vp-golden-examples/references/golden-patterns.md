@@ -96,8 +96,48 @@ If a filter itself has a time phrase, keep that time condition attached to the
 filter source. Example: product subscription in the last 45 days can require a
 subscription event date condition even when the main KPI uses another table.
 
+## Predicate Filters (membership, range, null, comparison)
+
+Filters are predicates. Operator tokens, operand shapes, and exact syntax are
+defined in `vp-rendering-rules/references/operator-catalog.md`; the examples
+below show how marketer language maps to them.
+
+When one attribute is given several allowed values, render one membership
+filter, not several equality conditions. Canonical syntax:
+`COLUMN IN LIST (v1;v2;v3)` — semicolon separated, numeric/single-token values
+bare, space-containing values single-quoted.
+
+Reviewed golden and production examples:
+
+- "products 123 or 125" ->
+  `SUBSCRIPTIONS_Product_Id IN LIST (123;125)`, usually with
+  `COUNT_ALL(SUBSCRIPTIONS_Product_Id) > 0` when the list is the whole audience.
+- "active or inactive subscribers" ->
+  `Profile_Cdr_Subscriber_Status IN LIST (active;inactive)`.
+- "feature phones, smartphones" ->
+  `Profile_Cdr_Handset_Type IN LIST ('feature phone';'smartphone')`.
+- "smartphone or iPhone users" ->
+  `Profile_Cdr_Handset_Type IN LIST (smartphone;iPhone)`.
+- promotion/bonus delivery checks ->
+  `LC_ACTION_TYPE IN LIST (Promotion;PROMOTION;promotion)` or
+  `LC_ACTION_TYPE IN LIST (BONUS;Bonus;bonus)`.
+- refill pack membership ->
+  `RE_REFILL_ID IN LIST (MD03;M138;M139;M140)`, with `COUNT_ALL(RE_REFILL_ID)`.
+
+Decision cue: alternatives for the SAME attribute joined by "or"/commas ->
+IN LIST. Constraints on DIFFERENT attributes (prepaid + smartphone) -> separate
+AND filters, never a list.
+
 ## Verification Traps
 
+- A count/sum with NO stated period must be a raw `COUNT_ALL(...)` / `SUM(...)`,
+  not a period snapshot. "count of recharges performed by ... customers" (no
+  period) -> `COUNT_ALL(Recharge_count)`, NOT `CUST_360_RECHARGE_COUNT_90D` and
+  NOT any `_90D`/`_30D` column. Only use a `_Nd`/`_M*`/`_W*` snapshot when the
+  user stated that exact period.
+- Tenure/age ("on the network more than 300 days", "age in network > 65 days",
+  "active for 35 days") is a filter `AON > N`, never a time window and never a
+  reason to select a period snapshot or add a date bound.
 - Do not convert every "last month" request to event-table dates. If retrieval
   has a matching `M1` snapshot KPI, prefer the raw snapshot comparison.
 - Do not add a global date condition just because the marketer mentioned time.
@@ -105,5 +145,13 @@ subscription event date condition even when the main KPI uses another table.
 - Do not collapse onnet, offnet, local, roaming, IDD, bundle, free, PayG, and
   finance-service revenue into generic revenue.
 - Do not use a formula seed for plain "total" requests.
+- Do not split a single multi-value attribute ("smartphone or iPhone") into
+  `handset = smartphone AND handset = iPhone`. That intersection is always
+  empty. Use one `IN LIST`.
+- Do not quote the whole list: `IN LIST "(123;125)"` is wrong. Quote only
+  individual space-containing members, and never the parentheses.
+- Do not use commas as the list separator; the separator is always `;`.
+- A membership filter has fixed values; it must not carry the runtime
+  `${operator} ${value}` pair.
 - Do not expose these golden examples as exact user-facing explanations unless
   the user asks for debugging detail.

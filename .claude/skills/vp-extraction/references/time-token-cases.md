@@ -13,3 +13,25 @@
 - `last 14 days` -> `14D`; divisor semantics are days, not weeks.
 - Missing time -> `none`.
 
+## Tenure / age phrases are NOT time windows
+
+A duration that describes how long the customer has existed on the network is a
+FILTER on an age/tenure column, never the KPI's `time_token`. Do not let it set
+the window. Keep `time_token = none` if that duration is the only duration in
+the sentence.
+
+These map to an age/tenure filter (operator + N), not a time token:
+
+- "been on the network for more than 300 days" -> filter `AON > 300`, time `none`.
+- "age in the network is more than 65 days" -> filter `AON > 65`, time `none`.
+- "active for more than 35 days" -> filter `AON > 35`, time `none`.
+- "network age greater than 50 days" -> filter `AON > 50`, time `none`.
+
+Contrast (these ARE windows on the measured event):
+
+- "recharges in the last 300 days" -> `300D` (the count is measured over 300 days).
+- "data usage over the last 30 days" -> `30D`.
+
+Rule of thumb: if the duration answers "how long has the subscriber been on the
+network / active", it is a tenure filter. If it answers "over what period is the
+KPI measured", it is the time window.
