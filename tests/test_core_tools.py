@@ -30,22 +30,39 @@ def test_default_models_are_sonnet5_and_haiku45(monkeypatch):
     assert settings.subagent_model == "claude-haiku-4-5-20251001"
 
 
-def test_orchestrator_requires_render_pipeline_and_disallows_bash():
+def test_orchestrator_uses_agentic_emission_and_disallows_bash():
     from vp_agent.orchestrator import ORCHESTRATOR_APPEND, build_options
 
-    assert "Mandatory API workflow" in ORCHESTRATOR_APPEND
-    assert "mcp__vp__normalize_slots" in ORCHESTRATOR_APPEND
+    assert "Agentic emission is the only path" in ORCHESTRATOR_APPEND
+    assert "There is no deterministic plan step" in ORCHESTRATOR_APPEND
+    assert "template  = the complete string you composed" in ORCHESTRATOR_APPEND
+    assert "main KPI column's group_name" in ORCHESTRATOR_APPEND
+    assert "same group_name as the table argument" in ORCHESTRATOR_APPEND
     assert "mcp__vp__render_condition" in ORCHESTRATOR_APPEND
-    assert "Do not produce a final answer before this" in ORCHESTRATOR_APPEND
+    assert "Mandatory API workflow" not in ORCHESTRATOR_APPEND
+    assert "planned render_input" not in ORCHESTRATOR_APPEND
     assert "Missing comparison threshold is not by itself a clarification" in ORCHESTRATOR_APPEND
     assert "Values stated in the request for non-main KPIs are fixed filters" in ORCHESTRATOR_APPEND
     assert "Do not ask clarification for a missing filter" in ORCHESTRATOR_APPEND
     assert '"high value customer"' in ORCHESTRATOR_APPEND
-    assert "Do not search" in ORCHESTRATOR_APPEND
+    assert "Do not search the filesystem" in ORCHESTRATOR_APPEND
 
     options = build_options()
 
     assert "Bash" in options.disallowed_tools
+    for tool in (
+        "mcp__vp__build_condition_plan",
+        "mcp__vp__select_seed",
+        "mcp__vp__route_table",
+    ):
+        assert tool not in options.allowed_tools
+    for tool in (
+        "mcp__vp__retrieve_columns",
+        "mcp__vp__shelf_lookup",
+        "mcp__vp__render_condition",
+        "mcp__vp__validate_rule",
+    ):
+        assert tool in options.allowed_tools
 
 
 def test_api_request_schema_is_agent_only():
@@ -366,7 +383,7 @@ def test_pre_tool_hook_denies_subagent_before_render():
         hook(
             {
                 "tool_name": "Agent",
-                "tool_input": {"subagent_type": "extractor"},
+                "tool_input": {"subagent_type": "verifier"},
             },
             "tool-1",
             {"signal": None},
@@ -376,32 +393,6 @@ def test_pre_tool_hook_denies_subagent_before_render():
     output = result["hookSpecificOutput"]
     assert output["permissionDecision"] == "deny"
     assert "MCP pipeline" in output["permissionDecisionReason"]
-
-
-def test_stop_hook_blocks_after_plan_before_render_once():
-    from vp_agent.hooks import make_hooks
-    from vp_agent.schemas import ToolState
-
-    state = ToolState(plan_seen=True, render_seen=False)
-    hooks = make_hooks(state)
-    hook = hooks["Stop"][0].hooks[0]
-
-    first = asyncio.run(hook({"hook_event_name": "Stop"}, None, {"signal": None}))
-    second = asyncio.run(hook({"hook_event_name": "Stop"}, None, {"signal": None}))
-
-    assert first["decision"] == "block"
-    assert "render_condition" in first["reason"]
-    assert second == {}
-
-
-def test_stop_hook_allows_after_render():
-    from vp_agent.hooks import make_hooks
-    from vp_agent.schemas import ToolState
-
-    state = ToolState(plan_seen=True, render_seen=True)
-    hook = make_hooks(state)["Stop"][0].hooks[0]
-
-    assert asyncio.run(hook({"hook_event_name": "Stop"}, None, {"signal": None})) == {}
 
 
 def test_render_hook_stores_parent_condition():
@@ -505,25 +496,22 @@ def test_cli_accepts_debug_sdk_and_trace_file_flags():
     assert "--deterministic" not in result.stdout
 
 
-def test_resolver_and_verifier_use_golden_examples_skill():
+def test_verifier_uses_golden_examples_skill():
     from vp_agent.orchestrator import build_agents
 
     agents = build_agents("test-model")
 
-    assert "vp-golden-examples" in agents["resolver"].skills
+    assert set(agents) == {"verifier"}
     assert "vp-golden-examples" in agents["verifier"].skills
 
 
-def test_agent_prompts_live_under_claude_agents():
+def test_verifier_prompt_lives_under_claude_agents():
     from vp_agent.orchestrator import load_agent_prompt
 
     agents_dir = PROJECT_DIR / ".claude" / "agents"
 
-    assert (agents_dir / "extractor.md").is_file()
-    assert (agents_dir / "resolver.md").is_file()
     assert (agents_dir / "verifier.md").is_file()
-    assert "VP Resolver" in load_agent_prompt("resolver")
-    assert "---" not in load_agent_prompt("extractor")
+    assert "VP Verifier" in load_agent_prompt("verifier")
 
 
 def test_retrieve_finds_recharge_30d_and_profile_filters():

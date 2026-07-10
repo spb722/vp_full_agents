@@ -24,7 +24,7 @@ def make_hooks(state: ToolState):
             tool_input = input_data.get("tool_input", {})
             log_tool_start(state, tool_name, tool_input)
 
-            if tool_name in {"mcp__vp__normalize_slots", "mcp__vp__retrieve_columns", "mcp__vp__build_condition_plan"}:
+            if tool_name in {"mcp__vp__normalize_slots", "mcp__vp__retrieve_columns"}:
                 state.slots_seen = True
 
             if tool_name == "mcp__vp__render_condition" and not state.slots_seen:
@@ -42,7 +42,7 @@ def make_hooks(state: ToolState):
                         "hookSpecificOutput": {
                             "hookEventName": "PreToolUse",
                             "permissionDecision": "deny",
-                            "permissionDecisionReason": "Complete the VP MCP pipeline directly before launching subagents: normalize_slots, retrieve_columns, route/select/plan, render_condition, validate_rule.",
+                            "permissionDecisionReason": "Complete the VP MCP pipeline directly before launching subagents: normalize_slots or retrieve_columns, render_condition, validate_rule.",
                         }
                     }
                 agent_name = tool_input.get("agent_name") or tool_input.get("subagent_type") or "unknown"
@@ -113,30 +113,14 @@ def make_hooks(state: ToolState):
                     "PostToolUse",
                     "A non-render tool returned a parent_condition. Treat it as evidence only and call render_condition for the final rule.",
                 )
-            if tool_name == "mcp__vp__build_condition_plan":
-                state.plan_seen = True
         except Exception as exc:
             return _hook_warning("PostToolUse", f"VP post-tool hook failed without blocking execution: {type(exc).__name__}: {exc}")
 
         return {}
 
-    async def stop(input_data: dict[str, Any], tool_use_id: str, context: Any):
-        if state.plan_seen and not state.render_seen and state.stop_blocks < 1:
-            state.stop_blocks += 1
-            return {
-                "decision": "block",
-                "reason": (
-                    "A renderable VP condition plan already exists. Do not stop for a missing comparison threshold: "
-                    "normal VP expressions preserve runtime `${operator} ${value}` placeholders. "
-                    "Call mcp__vp__render_condition with the planned render_input, then call mcp__vp__validate_rule."
-                ),
-            }
-        return {}
-
     return {
         "PreToolUse": [HookMatcher(hooks=[pre_tool_use])],
         "PostToolUse": [HookMatcher(hooks=[post_tool_use])],
-        "Stop": [HookMatcher(hooks=[stop])],
     }
 
 
