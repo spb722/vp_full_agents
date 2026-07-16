@@ -1,0 +1,636 @@
+VP AGENT OPTIMIZATION DISCUSSION
+================================
+
+Purpose
+-------
+Record each optimization decision in plain language before implementation.
+No runtime change should be made from this document until the corresponding
+discussion point is reviewed and approved.
+
+
+DISCUSSION POINT 1 — DATE-COLUMN CONFIGURATION AND COMPACT RETRIEVAL OUTPUT
+Status: APPROVED FOR IMPLEMENTATION
+
+1A. Deterministic group-to-date-column configuration
+----------------------------------------------------
+
+Decision direction:
+Once the table/group has been resolved, use a reviewed configuration to select
+its normal event-date column. Do not run a broad retrieve_columns search merely
+to rediscover a date column that is already known for that group.
+
+Proposed Omantel defaults, verified against kpi_meta.csv:
+
+  Instant_cdr_group -> FCT_DT
+  Common_Seg_Fct    -> COMMON_Event_Date
+  Subscriptions     -> SUBSCRIPTIONS_DT
+  Recharge_Seg_Fct  -> RECHARGE_Event_Date
+  LIFECYCLE_CDR     -> L_SENT_DATE
+
+Important spelling/case:
+
+  Use COMMON_Event_Date, not COMMON_Event_date.
+
+Expected benefit:
+
+  - Removes unnecessary date-column retrieval calls after routing.
+  - Prevents unrelated date columns from different groups entering model
+    context.
+  - Reduces tokens and latency.
+  - Makes date-column selection deterministic and auditable.
+
+Required safeguards before implementation:
+
+  1. Keep one source of truth. Replace or reuse existing mappings rather than
+     creating conflicting mappings in multiple modules.
+  2. Scope the configuration by client, because another client may use
+     different groups or date columns.
+  3. Validate the configuration against kpi_meta.csv at startup or in tests:
+     both the group and configured feature must exist, and the feature must
+     belong to that group.
+  4. Support a default date column plus a reviewed intent-specific override
+     where the group has more than one legitimate date:
+
+       Subscriptions:
+         default/provisioning -> SUBSCRIPTIONS_DT
+         renewal/cancellation lifecycle event -> SUBSCRIPTIONS_EVENT_DATE
+
+       LIFECYCLE_CDR:
+         default -> L_SENT_DATE
+
+     Do not add promotion/bonus overrides yet. Add them later only after a
+     reviewed use case establishes the required semantics.
+
+  5. Use retrieval as a controlled fallback when:
+       - the resolved group has no configured date column;
+       - the requested event meaning requires a non-default date;
+       - metadata validation rejects the configured value; or
+       - routing is retried after a coverage/date failure.
+  6. Record in the audit whether the date column came from configuration,
+     an intent-specific override, or fallback retrieval.
+  7. Add tests for every configured group, exact spelling/case, overrides, and
+     fallback behavior.
+
+Observation:
+The current seed helper already contains a partial DATE_COL_BY_GROUP mapping,
+but its Instant_cdr_group default is created_date. That represents ingestion
+time, whereas FCT_DT represents the actual event date. The implementation must
+consolidate this existing mapping rather than adding a second competing map.
+
+Progressive-disclosure decision:
+
+  - Deterministic client configuration is the source of truth. The model does
+    not choose a known default from prose.
+  - vp-table-routing/SKILL.md should contain only the short operating rule:
+    after routing, use the configured group date; consult the date-routing
+    reference only for ambiguity or an explicit non-default event meaning.
+  - A focused vp-table-routing reference should document the reviewed defaults,
+    the Subscriptions override, examples, and fallback conditions.
+  - Future promotion/bonus lifecycle rules belong in that focused reference
+    and deterministic configuration after review. They should not enlarge the
+    always-loaded core skill.
+  - Assets are not appropriate for these rules; assets are better suited to
+    reusable templates or data files, while this is procedural reference
+    knowledge.
+
+
+1B. Separate full audit data from compact model-facing evidence
+----------------------------------------------------------------
+
+Decision direction:
+The retrieval engine may calculate and retain the complete candidate ranking,
+but the agent should receive only the fields required for semantic selection.
+
+Full audit representation (stored outside model context):
+
+  - candidate id
+  - all returned candidates and their rank
+  - BM25 raw/normalized score
+  - embedding/semantic score
+  - hybrid score
+  - metadata boost
+  - client prior
+  - final score
+  - complete ranking reason
+  - query/slots, client, retrieval version, and request id
+
+Compact agent-facing representation:
+
+  {
+    "candidate_id": "1850",
+    "feature_name": "FCT_DT",
+    "group_name": "Instant_cdr_group",
+    "data_type": "date",
+    "description": "Usage event date derived from event_timestamp.",
+    "time_window_support": "custom rolling window",
+    "score": 0.77,
+    "evidence": "Event-date column compatible with the requested two-day window."
+  }
+
+Audit linkage:
+
+  - Generate an audit_id for the complete retrieval operation.
+  - Return audit_id and candidate_id values in the compact response.
+  - Store the complete ranking in a dedicated Langfuse observation or other
+    non-prompt audit store.
+  - record_resolution should reference the selected candidate_id and audit_id.
+  - Do not put the complete ranking in request state if that state is serialized
+    into later model prompts.
+
+Audit-storage decision:
+
+  - Langfuse is the system of record for the complete retrieval ranking.
+  - Normal request state stores only audit_id, returned candidate ids, selected
+    candidate id, and the compact evidence used for the decision.
+  - Do not create a permanent JSON file for every production request. That
+    would duplicate Langfuse, add retention/security work, and risk the two
+    copies becoming inconsistent.
+  - Regression and investigation tooling may export selected Langfuse traces to
+    JSON on demand, as already done for the Omantel test run.
+  - A Langfuse audit-write failure must not fail condition construction; record
+    the audit-write status and continue with the deterministic workflow.
+
+Expected benefit:
+
+  - The system retains full debugging and reproducibility information.
+  - The agent processes only concise, decision-relevant evidence.
+  - Retrieval ranking calculations do not consume repeated model tokens.
+
+
+Confirmed decisions for Discussion Point 1
+------------------------------------------
+
+  1. SUBSCRIPTIONS_DT is the normal default.
+  2. SUBSCRIPTIONS_EVENT_DATE is used for renewal/cancellation lifecycle events.
+  3. L_SENT_DATE is the only configured LIFECYCLE_CDR default for now.
+  4. Detailed mappings/exceptions use progressive disclosure: deterministic
+     configuration plus a focused vp-table-routing reference, with only a short
+     rule in the core skill.
+  5. Langfuse stores the complete audit. Request state and model context remain
+     compact. JSON export is on demand, not per production request.
+
+  6. “Summary CDR” is the business name used for Common_Seg_Fct.
+
+Approval gate:
+All Discussion Point 1 decisions are confirmed. Runtime implementation remains
+separate and should begin only when explicitly requested.
+
+
+DISCUSSION POINT 2 — ROLE-AWARE BATCH RETRIEVAL
+Status: APPROVED FOR IMPLEMENTATION
+
+Objective:
+Replace repeated retrieve_columns calls for the metric, filters, and date with
+one structured request that preserves the semantic role of each requested
+concept.
+
+Important dependency on Discussion Point 1:
+Time is normally a compatibility/routing constraint, not another broad column
+search. After the metric group is resolved, its normal event-date column comes
+from the approved group-date configuration. Date-column retrieval is only a
+fallback for an unconfigured group or explicit non-default event meaning.
+
+Approved interpretation contract:
+
+  - Separate the main metric, metric qualifiers, customer filters, and time
+    meaning before retrieval.
+  - Local/on-net/off-net/roaming/PAYG/bundled/free normally qualify the metric
+    they describe. They become customer filters only when the sentence
+    explicitly applies them to the subscriber base.
+  - Preserve time meaning structurally. Do not collapse “last 3 months” (a
+    three-month range) and “month 3” (one fixed offset month) into the same M3
+    meaning.
+
+Approved batch behavior:
+
+  - The model makes one structured batch-retrieval call.
+  - Internally, the tool runs independent searches for the metric and for each
+    filter. Batch means one request/response, not one flat combined ranking.
+  - metric_candidates is always an ordered array, even when it contains zero
+    or one candidate.
+  - Assign every filter a stable filter_id. Return one independent candidate
+    array for every filter_id.
+  - A metric candidate competes only with metric candidates. A candidate for
+    one filter competes only with candidates for that same filter.
+  - Retrieval proposes candidates; it does not make the final semantic
+    selection. record_resolution stores the selected candidate ids.
+
+Approved time behavior:
+
+  - Time is normally a metric-compatibility and routing constraint, not a broad
+    date-column search.
+  - Attach time_compatibility to each metric candidate because one candidate
+    may be an exact snapshot while another requires an event range.
+  - After the resolver selects an event metric, obtain its normal date column
+    from the approved group-date configuration.
+  - Use date retrieval only for an unconfigured group, explicit non-default
+    event meaning, or date/coverage retry.
+
+Approved compact response shape (conceptual):
+
+  {
+    "audit_id": "...",
+    "metric_candidates": [
+      {
+        "rank": 1,
+        "candidate_id": "...",
+        "feature_name": "...",
+        "group_name": "...",
+        "score": 0.0,
+        "evidence": "...",
+        "time_compatibility": {"status": "..."}
+      }
+    ],
+    "filter_candidate_groups": [
+      {
+        "filter_id": "f1",
+        "requested_filter": "...",
+        "candidates": []
+      }
+    ]
+  }
+
+Failure/expansion behavior:
+
+  - If one role has no eligible candidate, report that role explicitly.
+  - A later expansion retry must target only the unresolved role; do not repeat
+    successful metric/filter searches.
+  - Keep the full per-role rankings in the Langfuse audit identified by
+    audit_id; return only compact evidence to the model.
+
+Expected benefit:
+
+  - Fewer model/tool round trips.
+  - No repeated date-column discovery for configured groups.
+  - No competition between unrelated metric and filter columns.
+  - Less risk that a metric qualifier such as PAYG becomes an unintended
+    subscriber filter.
+
+
+DISCUSSION POINT 3 — GROUP/TABLE-AWARE RE-RANKING
+Status: APPROVED FOR IMPLEMENTATION
+
+Objective:
+After role-aware retrieval, evaluate candidate combinations so the resolver can
+prefer a semantically correct, time-compatible route with fewer unnecessary
+groups/tables. Never sacrifice KPI/filter meaning merely to reduce table count.
+
+Approved two-stage selection:
+
+  Stage 1 — hard eligibility gates:
+
+  - Correct KPI/filter semantic family and qualifiers.
+  - Correct requested time meaning or valid event-range support.
+  - Compatible aggregate/data type and filter/operator shape.
+  - Valid client metadata, group ownership, and exclusion/retry constraints.
+
+  A plan that fails a hard gate is excluded. A same-group bonus must never
+  compensate for a semantic, time, type, or client mismatch.
+
+  Stage 2 — preferences among eligible plans:
+
+  - Stronger candidate relevance and concise supporting evidence.
+  - Exact reviewed Customer 360 snapshot when it represents the requested KPI
+    and period.
+  - Client production evidence.
+  - Fewer groups/tables and simpler route/rendering shape.
+
+  Fewer groups is a tie-breaker/preference among valid plans, not the first
+  objective.
+
+Approved combination behavior:
+
+  - Do not select the highest candidate for every role independently.
+  - Build candidate combinations and prefer an equivalent same-group filter
+    when the metric group already contains it.
+  - Keep a multi-group plan when another group is required for correct meaning.
+  - The deterministic planner proposes auditable plans; the resolver reviews
+    their evidence and record_resolution stores the final selection.
+
+Approved plan-pruning behavior:
+
+  - Avoid enumerating every Cartesian combination of five candidates per role.
+  - Start from each eligible metric candidate and treat its group as the plan
+    anchor.
+  - First try to satisfy every filter from that metric group.
+  - Add only the minimum additional groups required for unresolved filters.
+  - Remove duplicate/equivalent plans before returning them to the model.
+  - Return at most three structurally distinct valid proposals:
+      1. best single-group plan;
+      2. best minimal multi-group plan;
+      3. best alternative metric/table plan.
+  - Preserve the complete considered/rejected plan audit in Langfuse, not in
+    model context.
+
+
+DISCUSSION POINT 4 — FIVE COMPACT CANDIDATES PER ROLE BY DEFAULT
+Status: APPROVED FOR IMPLEMENTATION
+
+Objective:
+Reduce retrieval payload by returning a small compact candidate set for each
+metric/filter role while preserving enough alternatives for semantic and route
+selection. Five is a default response limit, not permission to silently hide a
+required candidate.
+
+Approved behavior:
+
+  - Return up to five eligible compact candidates for every role, not five for
+    the entire request.
+  - Use arrays consistently for metric candidates and each filter candidate
+    group, including zero- and one-candidate results.
+  - Sort candidates by rank and include stable candidate_id and rank fields.
+  - Do not pad a role to five with weak/ineligible candidates.
+  - Do not return only one candidate by default because the group-aware planner
+    needs valid snapshot/event/same-group alternatives.
+  - Keep full scoring and the complete ranking in the Langfuse audit; the model
+    receives only the compact per-role view.
+
+
+DISCUSSION POINT 5 — TARGETED DETERMINISTIC EXPANSION
+Status: APPROVED FOR IMPLEMENTATION
+
+Objective:
+Recover a relevant candidate below the initial five without returning ranks
+6–30 for every role and every request. Expansion should target only the role
+whose semantic, time, group-coverage, routing, or validation requirements remain
+unresolved.
+
+Approved audit/pagination behavior:
+
+  - Compute and retain the complete eligible ranking outside model context.
+  - Return audit_id, role_id, the returned raw-rank range, and
+    has_more_candidates with the initial compact response.
+  - Preserve raw_rank so a candidate returned during expansion remains
+    traceable to the original ranking.
+  - Reuse the stored ranking for expansion; do not repeat embedding/BM25 work
+    unless the corrected-retrieval phrase itself changes.
+
+Approved deterministic expansion triggers:
+
+  - No eligible candidate was returned for a required role.
+  - No candidate covers all required KPI/filter qualifiers.
+  - No candidate has valid requested-time compatibility.
+  - Group-aware planning cannot cover every required role.
+  - Routing rejects the selected group/table.
+  - Validation reports a column or coverage failure.
+  - Initial candidates are near-duplicates and do not provide required route
+    diversity.
+
+  The model must not expand only because of an unstructured feeling of
+  uncertainty. The triggering failure/evidence must be recorded.
+
+Approved expansion sequence:
+
+  1. Initial compact candidates: raw ranks 1–5.
+  2. First targeted expansion: raw ranks 6–10 for the unresolved role only.
+  3. Second targeted expansion when still unresolved: raw ranks 11–15 for that
+     role only.
+  4. Stop when the role resolves, the calibrated eligibility floor is reached,
+     or rank 15 is exhausted.
+  5. If still unresolved, retry with corrected semantic slots/exclusions where
+     the failure class permits it. Ask one clarification only when reviewed
+     evidence and allowed retries cannot resolve the meaning.
+
+  Never repeat successful metric/filter roles during a targeted expansion.
+  Merge expanded candidates with the existing compact candidate pool and rerun
+  eligibility and group-aware planning.
+
+Calibration note:
+Do not invent an absolute confidence threshold during implementation. Calibrate
+the eligibility/expansion floor against reviewed golden cases and observed
+Langfuse rankings.
+
+
+DISCUSSION POINT 6 — ONE COMPLETE SELECTED SEED AND THREE COMPACT ALTERNATIVES
+Status: APPROVED FOR IMPLEMENTATION
+
+Objective:
+Reduce select_seed context by keeping complete structural metadata only for the
+selected seed while returning a small, structurally useful alternative set.
+Remove selection_signature from every alternative returned to the model, while
+preserving every full seed/ranking record in the audit store.
+
+Determinism and correctness decision:
+
+  - Deterministic means the same normalized slots, seed catalog, configuration,
+    and scoring version produce the same ranking. It does not guarantee that
+    raw rank 1 is semantically correct.
+  - Real regression example: for “total data usage over the last 2 days,” the
+    matcher ranked S05_last_n_days_bounded first while the reviewed behavior
+    used the lower-bound-only S04_last_n_days_sum, which appeared at raw rank 5.
+  - Treat deterministic seed matching as an auditable proposal generator, not
+    final truth. The resolver reviews evidence/alternatives; the renderer emits;
+    the validator checks; record_resolution stores the final seed decision.
+
+Required hard compatibility gates before seed scoring:
+
+  - Aggregate/operation type.
+  - Formula requirement and divisor/metric intent.
+  - Time kind, unit, and reviewed bound style.
+  - Runtime placeholder requirements.
+  - GROUPBY, join, guard, and composition requirements.
+  - Client applicability and required-variable availability.
+
+  Exclude a seed that fails a required structural property. Do not allow a high
+  lexical/client score to compensate for the wrong formula, time, bound,
+  grouping, join, guard, or runtime behavior.
+
+Seed failure/review behavior:
+
+  - Preserve the reason each seed passed or failed hard gates in the audit.
+  - If the catalog lacks a compatible structure, do not silently select the
+    least-wrong seed. Retry corrected slots where permitted, then surface an
+    explicit unresolved-seed state if no compatible seed exists.
+  - Choose alternatives for structural usefulness/diversity, not merely raw
+    ranks 2–4. The alternative set must expose a relevant competing bound,
+    formula, grouping, join, or guard behavior when one exists.
+
+Approved model-facing seed response:
+
+  - Name raw rank 1 proposed_selected_seed, not selected_seed. Deterministic
+    matching proposes; the resolver makes the final reviewed decision.
+  - Return the complete compatible details for proposed_selected_seed,
+    including required/suggested variables, complete selection_signature,
+    score/confidence, and concise pass evidence.
+  - Return up to three structurally useful compact alternatives. Do not pad the
+    response with irrelevant seeds merely to reach three.
+  - Do not include selection_signature on alternatives returned to the model.
+  - Compact alternatives include seed_id, raw_rank, description,
+    score/confidence, the decision-relevant structural difference, and concise
+    evidence.
+  - Select alternatives for structural diversity among eligible seeds (for
+    example bound style, formula, grouping, join, guard, or snapshot/event
+    behavior), not simply raw ranks 2–4.
+  - If the resolver promotes an alternative, fetch the complete reviewed
+    catalog entry for only that seed by audit_id/seed_id. The resolver must not
+    reconstruct missing seed metadata or syntax itself.
+  - record_resolution stores the final selected seed id and whether it matched
+    or overrode proposed_selected_seed.
+
+Measured projection from the Langfuse sample:
+
+  - Two-day data-usage select_seed payload: 20,494 characters to approximately
+    2,946 (about 85.6% reduction).
+  - Off-net SMS select_seed payload: 37,694 characters to approximately 3,154
+    (about 91.6% reduction).
+  - Treat these as character/context projections to verify in an A/B run, not
+    guaranteed billed-token reductions.
+
+
+DISCUSSION POINT 7 — 34-CASE REGRESSION AND DEFAULT-ROLLOUT GATE
+Status: IMPLEMENTED; FULL PAIRED RELEASE GATE PENDING
+
+Objective:
+Run the same exact 34 Omantel sentences before and after optimization, separate
+semantic correctness from strict golden-string equality, and enable compact
+retrieval as the default only when correctness/validation does not regress and
+measured context, tool calls, latency, and cost improve.
+
+Approved per-request evaluation separation:
+
+  - Keep the normal API response compact: ok/status, request_id, rendered
+    condition or clarification, and a concise validation status where exposed.
+  - Keep only decision-relevant compact candidates in model context.
+  - Preserve complete rankings, prompts, tool activity, and detailed evidence
+    in Langfuse/full audit state.
+  - Store a compact regression record per case containing completion/API status,
+    persisted validation, semantic adjudication, strict golden comparison, and
+    efficiency measurements such as tool calls, context size/tokens, latency,
+    and cost when available.
+  - Do not treat strict golden-string equality as semantic correctness. Record
+    both independently because different condition text may be semantically
+    equivalent.
+
+Approved correctness gate:
+
+  - Accuracy is non-negotiable. Token/context reduction must not change the
+    intended metric, metric qualifiers, filters, time interpretation,
+    aggregation, routing, seed structure, or rendered-condition validity.
+  - Evaluate correctness before efficiency. A smaller or faster run fails the
+    rollout gate if its semantic result or persisted validation regresses.
+  - Every condition-producing case must complete with persisted validation and
+    zero validation errors. An expected business clarification is evaluated as
+    a valid clarification outcome, not as a failed condition build.
+  - Treat infrastructure/session-limit failures separately from application
+    outcomes; they cannot be counted as correct or incorrect semantic results.
+  - Record strict golden equality separately. Textually different conditions
+    may pass semantic adjudication when they implement the same reviewed
+    meaning.
+  - The final metric/filters/time/plan/seed must remain traceable to stored
+    retrieval and selection audit evidence.
+
+Approved before-and-after measurement method:
+
+  - Run the exact same 34 Omantel sentences against the baseline and optimized
+    implementations under equivalent configuration.
+  - Compare each case independently before relying on aggregate improvements.
+  - Capture semantic outcome, persisted validation, model input/output tokens,
+    tool-response size, tool-call count, end-to-end latency, and cost when the
+    provider exposes it.
+  - Use actual provider/model token usage as the primary context metric. Treat
+    serialized character size as a useful diagnostic/projection, not as a
+    substitute for billed-token measurements.
+  - Summarize both central behavior (for example median) and tail behavior (for
+    example p95 or slowest/largest cases), so a few severe regressions are not
+    hidden by a good average.
+  - Apply the correctness gate first. Calculate and accept efficiency gains only
+    after every semantic difference and validation result has been reviewed.
+
+Approved comparison environment and iteration workflow:
+
+  - Freeze the current implementation, including its current skill files,
+    references, assets, prompts, deterministic configuration, and catalog
+    versions, as the baseline served on port 8000.
+  - Develop the optimized implementation, including its revised compact skills,
+    progressively disclosed references/assets, prompts, retrieval contracts,
+    and deterministic configuration, in an isolated branch/worktree served on
+    port 8001.
+  - Keep model/version settings and business-data inputs equivalent unless a
+    deliberately versioned change is part of the optimization being evaluated.
+  - Run sequential paired tests: submit one exact case to baseline, then the
+    same exact case to optimized, preserve both request IDs/full responses, and
+    proceed to the next case. Do not run the full suite concurrently.
+  - Label or externally map every trace by comparison run, case id, and variant
+    (baseline or optimized) so Langfuse records cannot be mixed.
+  - Review correctness first and efficiency second. If an optimized result has
+    a regression, diagnose it using the paired audit evidence, update only the
+    optimized version, and rerun the affected case plus any relevant regression
+    cases before repeating the complete release gate.
+  - Do not modify the frozen baseline to make a comparison pass. Create a new
+    versioned baseline only when intentionally beginning a new comparison cycle.
+
+Implementation checkpoint (2026-07-15):
+
+  - Added deterministic group/date configuration, compact role-aware retrieval,
+    request-scoped ranking reuse for targeted expansion, Langfuse full-audit
+    spans, structurally gated seed selection, compact seed alternatives, and a
+    checkpointed sequential two-port comparison harness.
+  - Added an immutable behavioral-baseline manifest referencing the reviewed
+    34 full responses, analysis, report, hashes, and historical request IDs.
+  - Port 8000 was discovered running uvicorn --reload from the same active
+    working directory. It automatically loaded optimized files, so the first
+    live two-port smoke is a harness/behavior check, not a valid live baseline
+    comparison. The harness now rejects endpoints that report the same variant.
+  - Port 8000 must run from a separately frozen baseline worktree before the
+    full paired release gate. Port 8001 reports variant=optimized and is healthy.
+  - Case-1 live smoke produced the same validated condition and seed on both
+    active processes. Baseline-like request ID: 9027c741f8; optimized request
+    ID: b2a01b1f28. Because both processes had optimized code, do not use that
+    pair to claim before/after savings.
+  - Preliminary historical-baseline versus optimized case-1 trace comparison:
+      * retrieve_columns context: 17,321 to 3,370 serialized characters
+        (about 80.5% reduction; two calls became one call);
+      * select_seed context: 20,494 to 4,535 characters (about 77.9% reduction);
+      * tool observations: 14 to 9 (about 35.7% reduction);
+      * trace cost: 0.575621 to 0.384984 (about 33.1% reduction);
+      * latency: 101.721s to 64.521s (about 36.6% reduction);
+      * reported trace total usage: 12,190 to 9,280 (about 23.9% reduction).
+    These are encouraging preliminary measurements, not the final paired gate,
+    because the traces were produced on different days/runs.
+  - Reduced always-loaded vp-extraction and vp-rendering-rules bodies from 230
+    total lines to 171 by moving duplicated details behind existing on-demand
+    references.
+  - Automated validation currently passes: 63 tests, Python compilation, skill
+    validation, and git diff whitespace checks.
+
+Corrected 34-case checkpoint (2026-07-15):
+
+  - Completed and preserved all 34 optimized full responses and request IDs.
+    The final consolidated response log is
+    traces/omantel_optimized_34_responses_final_20260715.json and its source
+    checkpoint/request mapping is in
+    traces/omantel_optimized_34_run_manifest_20260715.json.
+  - Final mechanical outcome: 33 validated rendered conditions plus one
+    reviewed clarification (case 10); no transport/application failures; every
+    rendered condition has exactly one runtime operator/value pair.
+  - Corrected regressions discovered by the first full run:
+      * case 10 now uses a deterministic stable ambiguity gate for a percentage
+        of recharge amount without a stated comparison/outcome;
+      * case 11 selects generic Total_Voice_Revenue rather than an unrequested
+        prepaid proxy;
+      * the renderer preserves literal V{...}=f{...} syntax and correctly
+        collapses seed-template braces, eliminating repeated formula-emission
+        workarounds;
+      * case 28 retains outgoing international/IDD scope on its bundled-SMS
+        count filter.
+  - Focused corrected request IDs: case 10 a477590e2f, case 11 c27832b07f,
+    case 27 30da66fce8, and case 28 0d39ae14ef.
+  - Corrected historical Langfuse comparison: retrieval calls -50.7%, retrieval
+    context -73.4%, seed context -70.3%, total tool-result text -49.5%, trace
+    cost -8.7%, reported total usage -0.8%, and measured latency -64.2%.
+    These are historical-vs-current diagnostics, not a valid same-time paired
+    release result.
+  - Accuracy gate: cases 1-23 and 25-34 are semantically accepted in the review;
+    case 24 needs one business confirmation: per-event AVG versus weekly total
+    divided by two for “average revenue in the last 2 weeks.”
+  - Full audit spans total about 76.0 MiB for the corrected 34-case run. This is
+    outside model context but should be reduced through a calibrated eligibility
+    floor and/or compressed audit representation before high-volume production.
+  - Automated validation after the corrections passes 69 tests, Python
+    compilation, skill validation, and git diff whitespace checks.
+  - Offline deterministic retrieval coverage is 33/33 rendered metrics within
+    the approved ranks 1-15. A live case-17 confirmation attempt hit the Claude
+    SDK session limit before render and was excluded from the consolidated log;
+    repeat it after the provider reset as part of the paired gate.
+  - The immutable two-port paired gate remains pending because port 8000 was
+    not served from a frozen baseline worktree.

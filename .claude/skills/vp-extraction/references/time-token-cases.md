@@ -13,6 +13,19 @@
 - `last 14 days` -> `14D`; divisor semantics are days, not weeks.
 - Missing time -> `none`.
 
+## Comparison periods
+
+For a metrics request, extract two role-bearing period tokens instead of letting
+the last phrase overwrite the first:
+
+- `2 months ago compared with last month` -> older `M2`, newer `M1`.
+- `M3 to M2 decline` -> older `M3`, newer `M2`.
+- `last week versus the week before` -> newer `W1`, older `W2`.
+
+Preserve the period relationship even when the sentence mentions the newer
+period first. Let the metrics skill decide whether the requested operation is a
+decline, uplift, ratio, percentage change, or an absolute comparison.
+
 ## Tenure / age phrases are NOT time windows
 
 A duration that describes how long the customer has existed on the network is a

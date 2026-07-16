@@ -15,6 +15,7 @@ Load [references/golden-patterns.md](references/golden-patterns.md) when:
 - a Customer 360 snapshot column may already encode the requested time period;
 - deciding between raw snapshot comparison and event-table date bounds;
 - choosing sum, count, average, max, formula, or presence-style seeds;
+- verifying a Variant-3 period comparison against reviewed KT conventions;
 - verifier sees a rendered condition that may contain an unnecessary date
   condition or a mismatched KPI family.
 
@@ -28,6 +29,8 @@ Resolver workflow:
    the requested period. Otherwise use event/summarized tables with date bounds.
 4. Do not invent columns. If no retrieved column matches the golden pattern,
    retry retrieval with better semantic terms or ask a clarification.
+5. For Variant 3, load `vp-metrics-comparison`; golden memory supplements its
+   reviewed dependency and formula rules rather than replacing them.
 
 Verifier workflow:
 

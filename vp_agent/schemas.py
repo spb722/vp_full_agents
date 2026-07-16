@@ -55,6 +55,14 @@ class ToolState:
     slots_seen: bool = False
     render_seen: bool = False
     rendered_parent_condition: str | None = None
+    normalized_slots: dict[str, Any] | None = None
+    resolution: dict[str, Any] | None = None
+    selected_seed: str | None = None
+    validation: dict[str, Any] | None = None
+    column_candidates: list[dict[str, Any]] = field(default_factory=list)
+    retrieval_audit_ids: list[str] = field(default_factory=list)
+    seed_audit_ids: list[str] = field(default_factory=list)
+    existing_vp_candidates: list[dict[str, Any]] = field(default_factory=list)
     subagent_counts: dict[str, int] = field(default_factory=dict)
     trace: list[dict[str, Any]] = field(default_factory=list)
 

@@ -209,7 +209,7 @@ def build_condition_plan(
         table=route.table,
         top_k=5,
     )
-    selected_seed = seed_result.get("selected")
+    selected_seed = seed_result.get("proposed_selected_seed")
     if not selected_seed:
         raise ValueError("no seed selected for condition plan")
 
@@ -231,7 +231,7 @@ def build_condition_plan(
         "filters": filters,
         "route": asdict(route),
         "seed": selected_seed,
-        "seed_alternatives": seed_result.get("candidates", [])[1:],
+        "seed_alternatives": seed_result.get("alternatives", []),
         "render_input": render_input,
     }
 

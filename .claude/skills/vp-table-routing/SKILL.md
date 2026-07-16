@@ -23,6 +23,18 @@ Routing principles:
 For multi-table Variant 2, order filters before aggregates and keep aggregate
 conditions last.
 
+Use the role-aware `retrieve_columns` response to build the smallest valid
+group plan around the metric candidate. Prefer compatible same-group filters,
+then add only the groups required for unresolved filters. A fewer-group plan is
+only a preference; never use it to override metric, qualifier, time, aggregate,
+type, or operator compatibility.
+
+Do not retrieve a default date column separately. Event candidates report
+`time_window_support`, and deterministic group/date configuration supplies the
+date after the metric group is chosen. Read
+[references/group-date-columns.md](references/group-date-columns.md) only for a
+date-coverage failure or when reviewing subscription event-date overrides.
+
 Tools can propose a route, but the resolver should inspect the request and KPI
 business meaning. If a Customer 360 snapshot column already represents the
 requested period, use it as a raw condition and do not add event-date bounds for

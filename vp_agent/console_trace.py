@@ -45,8 +45,23 @@ def summarize_tool_output(tool_name: str, tool_response: Any) -> str | None:
         return f"Tool output: table={table}" if table else None
     if tool_name == "mcp__vp__retrieve_columns":
         return _retrieve_summary(structured)
+    if tool_name == "mcp__vp__retrieve_existing_vps":
+        candidates = structured.get("candidates") or []
+        top = candidates[0] if candidates and isinstance(candidates[0], dict) else {}
+        return f"Tool output: existing_vp={top.get('name')}" if top.get("name") else None
     if tool_name == "mcp__vp__select_seed":
         return _seed_summary(structured)
+    if tool_name == "mcp__vp__record_resolution":
+        comparison = (structured.get("slots") or {}).get("comparison") or {}
+        text = _kv_summary(
+            {
+                "path": structured.get("path"),
+                "seed": structured.get("seed_id"),
+                "older": comparison.get("older_period"),
+                "newer": comparison.get("newer_period"),
+            }
+        )
+        return f"Agent resolution: {text}" if text else None
     if tool_name == "mcp__vp__build_condition_plan":
         return _resolver_summary(structured)
     if tool_name == "mcp__vp__render_condition":
@@ -70,7 +85,7 @@ def _extractor_summary(data: dict[str, Any]) -> str | None:
 
 
 def _retrieve_summary(data: dict[str, Any]) -> str | None:
-    candidates = data.get("candidates")
+    candidates = data.get("metric_candidates") or data.get("candidates")
     if not isinstance(candidates, list) or not candidates:
         return None
     top = candidates[0]
@@ -84,7 +99,7 @@ def _retrieve_summary(data: dict[str, Any]) -> str | None:
 
 
 def _seed_summary(data: dict[str, Any]) -> str | None:
-    selected = data.get("selected") or data.get("seed") or data
+    selected = data.get("proposed_selected_seed") or data.get("promoted_seed") or data.get("selected") or data.get("seed") or data
     if not isinstance(selected, dict):
         return None
     seed = selected.get("seed_id")

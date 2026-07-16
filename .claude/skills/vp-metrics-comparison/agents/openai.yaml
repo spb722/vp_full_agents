@@ -1,0 +1,4 @@
+interface:
+  display_name: "VP Metrics Comparison"
+  short_description: "Resolve telecom period-comparison VP metrics"
+  default_prompt: "Use $vp-metrics-comparison to resolve and verify a telecom uplift, decline, or period-comparison VP."

@@ -39,6 +39,8 @@ class VPBuildResponse(BaseModel):
     sentence: str
     parent_condition: str | None = None
     selected_columns: list[str] = Field(default_factory=list)
+    selected_vps: list[str] = Field(default_factory=list)
+    dependencies: list[dict[str, Any]] = Field(default_factory=list)
     seed: str | None = None
     path: str | None = None
     snapshot: bool | None = None
@@ -67,7 +69,7 @@ async def health() -> dict[str, str]:
 
 @app.get("/observability")
 async def observability() -> dict[str, Any]:
-    return {"langfuse": langfuse_status()}
+    return {"variant": load_settings().variant, "langfuse": langfuse_status()}
 
 
 @app.post("/vp/build", response_model=VPBuildResponse)
@@ -82,18 +84,29 @@ async def build_vp(request: VPBuildRequest) -> VPBuildResponse:
         **{
             "langfuse.user.id": user_id,
             "langfuse.session.id": session_id,
-            "langfuse.tags": ["vp-agent", request.client],
+            "langfuse.tags": ["vp-agent", request.client, settings.variant],
             "input.value": request.sentence,
             "vp.request_id": request_id,
             "vp.orchestrator_model": settings.orchestrator_model,
             "vp.subagent_model": settings.subagent_model,
             "vp.client": request.client,
             "vp.mode": "agent",
+            "vp.variant": settings.variant,
             "vp.sentence": request.sentence,
         },
     ) as span:
         try:
-            response = await _build_agentic(request, request_id=request_id, session_id=session_id)
+            stable_clarification = _stable_clarification_question(request.sentence)
+            if stable_clarification:
+                response = _clarification_response(
+                    request,
+                    request_id=request_id,
+                    session_id=session_id,
+                    question=stable_clarification,
+                    source="stable_percentage_of_amount",
+                )
+            else:
+                response = await _build_agentic(request, request_id=request_id, session_id=session_id)
         except Exception as exc:
             record_exception(span, exc)
             raise
@@ -108,6 +121,60 @@ async def build_vp(request: VPBuildRequest) -> VPBuildResponse:
             },
         )
         return response
+
+
+def _stable_clarification_question(request: str) -> str | None:
+    """Guard a small reviewed ambiguity primitive before expensive orchestration."""
+    percentage_amount = re.search(
+        r"\b(\d+(?:\.\d+)?)\s*%\s+of\s+(?:the\s+)?(?:recharge\s+)?amount\b",
+        request,
+        flags=re.I,
+    )
+    if not percentage_amount:
+        return None
+    explicit_comparison = re.search(
+        r"\b(?:greater than|more than|less than|at least|at most|equal(?:s| to)?|above|below|exceeds?|under)\b",
+        request,
+        flags=re.I,
+    )
+    if explicit_comparison:
+        return None
+    percentage = percentage_amount.group(1)
+    return (
+        f"What should the calculated {percentage}% of the recharge amount be compared with or used for? "
+        "For example, should it be compared with a specific threshold or with another amount?"
+    )
+
+
+def _clarification_response(
+    request: VPBuildRequest,
+    *,
+    request_id: str,
+    session_id: str,
+    question: str,
+    source: str,
+) -> VPBuildResponse:
+    settings = load_settings()
+    trace_state = ToolState(request_id=request_id, console_trace=console_trace_enabled())
+    log_line(trace_state, f"Stable clarification: client={request.client}, source={source}")
+    return VPBuildResponse(
+        ok=False,
+        mode="agent",
+        request_id=request_id,
+        session_id=session_id,
+        orchestrator_model=settings.orchestrator_model,
+        subagent_model=settings.subagent_model,
+        client=request.client,
+        sentence=request.sentence,
+        parent_condition=None,
+        slots={"needs_clarification": True, "questions": [question]},
+        raw_text=None,
+        needs_clarification=True,
+        clarification_question=question,
+        failure_reason="Clarification needed before rendering.",
+        diagnostics={"clarification_source": source},
+        warnings=[question],
+    )
 
 
 async def _build_agentic(request: VPBuildRequest, *, request_id: str | None = None, session_id: str | None = None) -> VPBuildResponse:
@@ -133,6 +200,18 @@ async def _build_agentic(request: VPBuildRequest, *, request_id: str | None = No
         else "Clarification needed before rendering." if needs_clarification else _missing_parent_condition_reason(state, raw_text, sdk_stderr)
     )
     settings = load_settings()
+    resolution = state.resolution or {}
+    validation = state.validation
+    selected_columns = list(resolution.get("selected_columns") or [])
+    if not selected_columns and isinstance(validation, dict):
+        selected_columns = list(validation.get("referenced_columns") or [])
+    selected_vps = list(resolution.get("selected_vps") or [])
+    if not selected_vps and parent_condition:
+        selected_vps = [
+            str(item.get("name"))
+            for item in state.existing_vp_candidates
+            if item.get("name") and str(item["name"]) in parent_condition
+        ]
     if parent_condition and not state.render_seen:
         log_line(state, f"Parent condition: {parent_condition}")
     log_line(state, f"Request completed: ok={str(bool(parent_condition)).lower()}")
@@ -148,12 +227,24 @@ async def _build_agentic(request: VPBuildRequest, *, request_id: str | None = No
         client=request.client,
         sentence=request.sentence,
         parent_condition=parent_condition,
+        selected_columns=list(dict.fromkeys(map(str, selected_columns))),
+        selected_vps=list(dict.fromkeys(map(str, selected_vps))),
+        dependencies=[item for item in resolution.get("dependencies") or [] if isinstance(item, dict)],
+        seed=resolution.get("seed_id") or state.selected_seed,
+        path=resolution.get("path"),
+        snapshot=resolution.get("snapshot"),
+        slots=resolution.get("slots") or state.normalized_slots,
+        validation=validation,
         raw_text=raw_text or None,
         needs_clarification=needs_clarification,
         clarification_question=clarification_question,
         failure_reason=failure_reason,
         diagnostics=None if parent_condition else _missing_parent_condition_diagnostics(state, raw_text, sdk_stderr),
-        warnings=[] if parent_condition else _missing_parent_condition_warnings(failure_reason, state, sdk_stderr, clarification_question),
+        warnings=(
+            _validation_warning_strings(validation)
+            if parent_condition
+            else _missing_parent_condition_warnings(failure_reason, state, sdk_stderr, clarification_question)
+        ),
     )
 
 
@@ -321,6 +412,17 @@ def _extract_clarification_question(text: str, request: str = "") -> str | None:
             "When you say high value customers, should that mean customers in an existing High Value segment, "
             "or customers whose revenue, spend, recharge amount, ARPU, or CLV crosses a threshold? "
             "If it is threshold-based, please specify which measure and whether the last 30 days should apply to it."
+        )
+    percentage_amount = re.search(
+        r"\b(\d+(?:\.\d+)?)\s*%\s+of\s+(?:the\s+)?(?:recharge\s+)?amount\b",
+        request,
+        flags=re.I,
+    )
+    if percentage_amount:
+        percentage = percentage_amount.group(1)
+        return (
+            f"What should the calculated {percentage}% of the recharge amount be compared with or used for? "
+            "For example, should it be compared with a specific threshold or with another amount?"
         )
     if not text:
         return None
@@ -514,3 +616,15 @@ def _seed_id(plan: dict[str, Any]) -> str | None:
 def _warnings(validation: dict[str, Any]) -> list[str]:
     warnings = validation.get("warnings") if isinstance(validation, dict) else None
     return list(warnings or [])
+
+
+def _validation_warning_strings(validation: dict[str, Any] | None) -> list[str]:
+    if not isinstance(validation, dict):
+        return []
+    result: list[str] = []
+    for warning in validation.get("warnings") or []:
+        if isinstance(warning, str):
+            result.append(warning)
+        else:
+            result.append(json.dumps(warning, sort_keys=True, default=str))
+    return result

@@ -9,3 +9,7 @@ if [ ! -x ".venv/bin/uvicorn" ]; then
 fi
 
 exec .venv/bin/uvicorn vp_agent.api:app --host "${VP_API_HOST:-127.0.0.1}" --port "${VP_API_PORT:-8000}" --reload
+#VP_VARIANT=optimized .venv/bin/python -m uvicorn \
+#  vp_agent.api:app \
+#  --host 127.0.0.1 \
+#  --port 8001

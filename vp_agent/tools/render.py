@@ -7,6 +7,7 @@ from vp_agent.data import find_seed
 
 
 TEMPLATE_VAR_RE = re.compile(r"(?<!\$)\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
+DOUBLE_FORMULA_BRACE_RE = re.compile(r"([Vf])\{\{([^{}]+)\}\}")
 
 
 def _literal(value: Any) -> str:
@@ -32,11 +33,20 @@ def _filter_condition(item: dict[str, Any]) -> str:
 def render_from_template(template: str, variables: dict[str, Any], filters: list[dict[str, Any]] | None = None) -> str:
     def replace(match: re.Match[str]) -> str:
         key = match.group(1)
-        if key not in variables:
-            raise ValueError(f"missing template variable: {key}")
-        return str(variables[key])
+        if key in variables:
+            return str(variables[key])
+        # A complete agent-composed rule contains literal engine formula syntax
+        # such as V{ALIAS}=f{COLUMN}. Those braces are not template variables.
+        prefix = template[match.start() - 1] if match.start() else ""
+        if prefix in {"V", "f"}:
+            return match.group(0)
+        raise ValueError(f"missing template variable: {key}")
 
     rendered = TEMPLATE_VAR_RE.sub(replace, template)
+    # Seed templates use triple braces around variables so the substituted
+    # value remains inside one literal V{...}/f{...} pair. Collapse only that
+    # known formula wrapper after variable substitution.
+    rendered = DOUBLE_FORMULA_BRACE_RE.sub(r"\1{\2}", rendered)
     filter_parts = [_filter_condition(item) for item in (filters or [])]
     parts = filter_parts + [rendered]
     return " AND ".join(part for part in parts if part)

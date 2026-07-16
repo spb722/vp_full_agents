@@ -1,15 +1,22 @@
 from __future__ import annotations
 
 from typing import Any
+import uuid
 
+from vp_agent.observability import observation, update_observation
 from vp_agent.tools.memory import episodic_lookup as episodic_lookup_core
 from vp_agent.tools.memory import queue_correction as queue_correction_core
 from vp_agent.tools.normalize import normalize_slots as normalize_slots_core
 from vp_agent.tools.plan import build_condition_plan as build_condition_plan_core
 from vp_agent.tools.render import render_condition as render_condition_core
-from vp_agent.tools.retrieve import retrieve_columns as retrieve_columns_core
+from vp_agent.tools.retrieve import (
+    build_retrieval_audit,
+    compact_retrieval_page,
+    serialize_retrieval_audit,
+)
+from vp_agent.tools.retrieve_vps import retrieve_existing_vps as retrieve_existing_vps_core
 from vp_agent.tools.router import route_table as route_table_core
-from vp_agent.tools.seed import select_seed as select_seed_core
+from vp_agent.tools.seed import build_seed_audit, compact_seed_selection, serialize_seed_audit
 from vp_agent.tools.shelf import shelf_lookup as shelf_lookup_core
 from vp_agent.tools.validate import validate_rule as validate_rule_core
 
@@ -25,6 +32,11 @@ def _text_result(data: Any) -> dict[str, Any]:
 
 def create_vp_server():
     from claude_agent_sdk import create_sdk_mcp_server, tool
+
+    # The MCP server is created per VP request. These stores let targeted
+    # expansion reuse the original ranking without putting it in model context.
+    retrieval_audits: dict[str, dict[str, Any]] = {}
+    seed_audits: dict[str, dict[str, Any]] = {}
 
     @tool(
         "normalize_slots",
@@ -43,26 +55,117 @@ def create_vp_server():
 
     @tool(
         "retrieve_columns",
-        "Retrieve candidate KPI/profile columns from kpi_meta for extracted VP slots.",
+        "Retrieve metric, filter, and time-compatible KPI/profile candidates in one batch. Returns up to five compact candidates per role; use audit_id plus page 2 or 3 only for triggered role expansion.",
         {
             "type": "object",
             "properties": {
                 "slots": {"type": "object"},
                 "client": {"type": "string"},
                 "exclude": {"type": "array", "items": {"type": "string"}},
-                "top_k": {"type": "integer", "minimum": 1, "maximum": 50},
+                "audit_id": {"type": "string"},
+                "expand_roles": {"type": "array", "items": {"type": "string"}},
+                "page": {"type": "integer", "minimum": 1, "maximum": 3},
             },
-            "required": ["slots", "client"],
+            "required": ["client"],
         },
     )
     async def retrieve_columns(args: dict[str, Any]) -> dict[str, Any]:
-        candidates = retrieve_columns_core(
+        audit_id = str(args.get("audit_id") or "")
+        if audit_id:
+            audit = retrieval_audits.get(audit_id)
+            if audit is None:
+                return _text_result({"audit_id": audit_id, "error": "retrieval audit is unavailable for expansion"})
+            return _text_result(
+                compact_retrieval_page(
+                    audit,
+                    audit_id=audit_id,
+                    role_ids=args.get("expand_roles") or None,
+                    page=args.get("page") or 2,
+                )
+            )
+
+        if "slots" not in args:
+            return _text_result({"error": "slots are required for initial column retrieval"})
+        audit_id = uuid.uuid4().hex[:12]
+        audit = build_retrieval_audit(
             slots=args["slots"],
             client=args["client"],
             exclude=args.get("exclude") or [],
-            top_k=args.get("top_k") or 12,
         )
-        return _text_result({"candidates": [candidate.__dict__ for candidate in candidates]})
+        retrieval_audits[audit_id] = audit
+        full_audit = serialize_retrieval_audit(audit)
+        with observation(
+            "vp.retrieve_columns.full_audit",
+            **{
+                "vp.audit_id": audit_id,
+                "vp.audit.kind": "column_retrieval",
+                "input.value": args,
+            },
+        ) as span:
+            update_observation(span, **{"output.value": full_audit})
+        return _text_result(compact_retrieval_page(audit, audit_id=audit_id))
+
+    @tool(
+        "retrieve_existing_vps",
+        "Retrieve ranked existing client VP names and definitions as evidence for reuse or composition. The agent decides whether a candidate semantically matches.",
+        {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "client": {"type": "string"},
+                "exclude": {"type": "array", "items": {"type": "string"}},
+                "top_k": {"type": "integer", "minimum": 1, "maximum": 50},
+            },
+            "required": ["query", "client"],
+        },
+    )
+    async def retrieve_existing_vps(args: dict[str, Any]) -> dict[str, Any]:
+        return _text_result(
+            {
+                "candidates": retrieve_existing_vps_core(
+                    query=args["query"],
+                    client=args["client"],
+                    exclude=args.get("exclude") or [],
+                    top_k=args.get("top_k") or 12,
+                )
+            }
+        )
+
+    @tool(
+        "record_resolution",
+        "Record the agent's semantic VP resolution and evidence choices before rendering. This tool stores no business logic and does not alter the decision.",
+        {
+            "type": "object",
+            "properties": {
+                "client": {"type": "string"},
+                "slots": {"type": "object"},
+                "selected_columns": {"type": "array", "items": {"type": "string"}},
+                "selected_vps": {"type": "array", "items": {"type": "string"}},
+                "seed_id": {"type": "string"},
+                "proposed_seed_id": {"type": "string"},
+                "seed_overrode_proposal": {"type": "boolean"},
+                "path": {"type": "string"},
+                "snapshot": {"type": "boolean"},
+                "dependencies": {"type": "array", "items": {"type": "object"}},
+            },
+            "required": ["client", "slots"],
+        },
+    )
+    async def record_resolution(args: dict[str, Any]) -> dict[str, Any]:
+        return _text_result(
+            {
+                "client": args["client"],
+                "slots": args["slots"],
+                "selected_columns": args.get("selected_columns") or [],
+                "selected_vps": args.get("selected_vps") or [],
+                "seed_id": args.get("seed_id"),
+                "proposed_seed_id": args.get("proposed_seed_id"),
+                "seed_overrode_proposal": args.get("seed_overrode_proposal", False),
+                "path": args.get("path"),
+                "snapshot": args.get("snapshot"),
+                "dependencies": args.get("dependencies") or [],
+            }
+        )
 
     @tool(
         "shelf_lookup",
@@ -97,7 +200,7 @@ def create_vp_server():
 
     @tool(
         "select_seed",
-        "Select the best VP seed/template from the seed catalog for slots, client, route table, and resolved columns.",
+        "Propose one complete structurally compatible seed and up to three compact diverse alternatives. Full ranking is audited externally; fetch one alternative by audit_id and seed_id only when promoting it.",
         {
             "type": "object",
             "properties": {
@@ -106,22 +209,53 @@ def create_vp_server():
                 "columns": {"type": "array", "items": {"type": "object"}},
                 "table": {"type": "string"},
                 "exclude": {"type": "array", "items": {"type": "string"}},
-                "top_k": {"type": "integer", "minimum": 1, "maximum": 20},
+                "audit_id": {"type": "string"},
+                "seed_id": {"type": "string"},
             },
-            "required": ["slots", "client"],
+            "required": ["client"],
         },
     )
     async def select_seed(args: dict[str, Any]) -> dict[str, Any]:
-        return _text_result(
-            select_seed_core(
-                slots=args["slots"],
-                client=args["client"],
-                columns=args.get("columns") or [],
-                table=args.get("table"),
-                exclude=args.get("exclude") or [],
-                top_k=args.get("top_k") or 5,
+        audit_id = str(args.get("audit_id") or "")
+        seed_id = str(args.get("seed_id") or "")
+        if audit_id and seed_id:
+            audit = seed_audits.get(audit_id)
+            if audit is None:
+                return _text_result({"audit_id": audit_id, "error": "seed audit is unavailable"})
+            candidate = next(
+                (item for item in audit["candidates"] if item["seed_id"] == seed_id and item["eligible"]),
+                None,
             )
+            if candidate is None:
+                return _text_result({"audit_id": audit_id, "seed_id": seed_id, "error": "seed is not an eligible audited alternative"})
+            promoted = {
+                key: value
+                for key, value in candidate.items()
+                if key not in {"eligible", "gate_failures", "structural_fingerprint"}
+            }
+            return _text_result({"audit_id": audit_id, "promoted_seed": promoted})
+        if "slots" not in args:
+            return _text_result({"error": "slots are required for initial seed selection"})
+
+        audit_id = uuid.uuid4().hex[:12]
+        audit = build_seed_audit(
+            slots=args["slots"],
+            client=args["client"],
+            columns=args.get("columns") or [],
+            table=args.get("table"),
+            exclude=args.get("exclude") or [],
         )
+        seed_audits[audit_id] = audit
+        with observation(
+            "vp.select_seed.full_audit",
+            **{
+                "vp.audit_id": audit_id,
+                "vp.audit.kind": "seed_selection",
+                "input.value": args,
+            },
+        ) as span:
+            update_observation(span, **{"output.value": serialize_seed_audit(audit)})
+        return _text_result(compact_seed_selection(audit, audit_id=audit_id))
 
     @tool(
         "build_condition_plan",
@@ -203,6 +337,8 @@ def create_vp_server():
         tools=[
             normalize_slots,
             retrieve_columns,
+            retrieve_existing_vps,
+            record_resolution,
             shelf_lookup,
             route_table,
             select_seed,

@@ -30,9 +30,9 @@ the KPI column:
 
 - "data usage last 2 days" -> date `FCT_DT >= CurrentTime-2DAYS`, aggregate
   `SUM(Total_Data_usage)`.
-- "voice revenue last 2 days" -> date `COMMON_FCT_DT >= CurrentTime-2DAYS`,
+- "voice revenue last 2 days" -> date `COMMON_Event_Date >= CurrentTime-2DAYS`,
   aggregate `SUM(Total_Voice_Revenue)`.
-- "data revenue last 2 days" -> date `COMMON_FCT_DT >= CurrentTime-2DAYS`,
+- "data revenue last 2 days" -> date `COMMON_Event_Date >= CurrentTime-2DAYS`,
   aggregate `SUM(Total_Data_Revenue)`.
 - "prepaid SMS revenue last one month" -> date
   `COMMON_Event_Date >= CurrentMonth-1MONTHS`, aggregate
@@ -73,10 +73,25 @@ Choose the seed/aggregation that matches the marketer's intent:
   `V{AVG_DAILY_COMMON_Data_Bundle_Revenue}=f{COMMON_Data_Bundle_Revenue/90}`.
 - "average weekly revenue last 4 weeks" -> formula dividing by 4, for example
   `V{AVG_WEEKLY_COMMON_OG_Call_Revenue}=f{COMMON_OG_Call_Revenue/4}`.
-- "20% of recharge amount" -> formula multiplying recharge amount by `0.2`.
+- "20% of recharge amount" by itself is superseded by the reviewed
+  clarification behavior: ask what the calculated amount should be compared
+  with or used for. Use a factor formula only when the request states the
+  intended comparison or outcome, such as "20% of recharge amount greater than
+  the specified threshold."
 - "maximum data usage" -> `MAX(...)`, not `SUM(...)`.
 - "purchased product 123 or 125" as a standalone audience filter -> product
   list plus `COUNT_ALL(SUBSCRIPTIONS_Product_Id) > 0`.
+
+## Variant-3 Period Metrics
+
+Rakesh's reviewed KT treats a two-period decline as a chained metric over helper
+VP names. For data-revenue decline comparing M2 with M1, resolve/reuse the M2
+and M1 data-revenue helper VPs, then apply:
+
+`(M2 helper - M1 helper) / M1 helper * 100 ${operator} ${value}`
+
+M2 is the older period; M1 is the newer period and denominator. The final
+metric references exact helper VP names and does not use `V{name}=f{...}`.
 
 ## Common Filters
 
@@ -145,6 +160,11 @@ AND filters, never a list.
 - Do not collapse onnet, offnet, local, roaming, IDD, bundle, free, PayG, and
   finance-service revenue into generic revenue.
 - Do not use a formula seed for plain "total" requests.
+- Do not turn percentage decline into an absolute subtraction. Do not reverse
+  the reviewed older/newer roles, omit `* 100`, or use the older period as the
+  denominator for Rakesh's decline convention.
+- Do not put the final Variant-3 metric in a `V{name}=f{...}` wrapper or replace
+  semantically matching helper VP names with raw snapshot column names.
 - Do not split a single multi-value attribute ("smartphone or iPhone") into
   `handset = smartphone AND handset = iPhone`. That intersection is always
   empty. Use one `IN LIST`.

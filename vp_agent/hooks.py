@@ -24,7 +24,11 @@ def make_hooks(state: ToolState):
             tool_input = input_data.get("tool_input", {})
             log_tool_start(state, tool_name, tool_input)
 
-            if tool_name in {"mcp__vp__normalize_slots", "mcp__vp__retrieve_columns"}:
+            if tool_name in {
+                "mcp__vp__normalize_slots",
+                "mcp__vp__retrieve_columns",
+                "mcp__vp__record_resolution",
+            }:
                 state.slots_seen = True
 
             if tool_name == "mcp__vp__render_condition" and not state.slots_seen:
@@ -75,6 +79,7 @@ def make_hooks(state: ToolState):
             tool_input = input_data.get("tool_input", {})
             tool_response = input_data.get("tool_response", {})
             log_tool_output(state, tool_name, tool_response)
+            structured = _extract_structured_content(tool_response)
 
             state.trace.append(
                 {
@@ -87,9 +92,52 @@ def make_hooks(state: ToolState):
                 }
             )
 
+            if tool_name == "mcp__vp__normalize_slots" and isinstance(structured, dict):
+                state.normalized_slots = structured
+
+            if tool_name == "mcp__vp__record_resolution" and isinstance(structured, dict):
+                state.resolution = structured
+
+            if tool_name == "mcp__vp__retrieve_columns" and isinstance(structured, dict):
+                audit_id = structured.get("audit_id")
+                if audit_id and str(audit_id) not in state.retrieval_audit_ids:
+                    state.retrieval_audit_ids.append(str(audit_id))
+                candidates: list[dict[str, Any]] = []
+                metric_candidates = structured.get("metric_candidates")
+                if isinstance(metric_candidates, list):
+                    candidates.extend(item for item in metric_candidates if isinstance(item, dict))
+                for role in structured.get("filter_candidates") or []:
+                    if isinstance(role, dict) and isinstance(role.get("candidates"), list):
+                        candidates.extend(item for item in role["candidates"] if isinstance(item, dict))
+                if candidates:
+                    known = {str(item.get("candidate_id")) for item in state.column_candidates}
+                    for item in candidates:
+                        if str(item.get("candidate_id")) not in known:
+                            state.column_candidates.append(item)
+                            known.add(str(item.get("candidate_id")))
+
+            if tool_name == "mcp__vp__retrieve_existing_vps" and isinstance(structured, dict):
+                candidates = structured.get("candidates")
+                if isinstance(candidates, list):
+                    known = {str(item.get("name")) for item in state.existing_vp_candidates}
+                    for item in candidates:
+                        if isinstance(item, dict) and str(item.get("name")) not in known:
+                            state.existing_vp_candidates.append(item)
+                            known.add(str(item.get("name")))
+
+            if tool_name == "mcp__vp__select_seed" and isinstance(structured, dict):
+                audit_id = structured.get("audit_id")
+                if audit_id and str(audit_id) not in state.seed_audit_ids:
+                    state.seed_audit_ids.append(str(audit_id))
+                selected = structured.get("proposed_selected_seed") or structured.get("promoted_seed")
+                if isinstance(selected, dict) and selected.get("seed_id"):
+                    state.selected_seed = str(selected["seed_id"])
+
+            if tool_name == "mcp__vp__validate_rule" and isinstance(structured, dict):
+                state.validation = structured
+
             if tool_name == "mcp__vp__render_condition":
                 state.render_seen = True
-                structured = tool_response.get("structuredContent") if isinstance(tool_response, dict) else None
                 condition = None
                 if isinstance(structured, dict) and structured.get("parent_condition"):
                     condition = structured["parent_condition"]
@@ -155,4 +203,30 @@ def _extract_parent_condition(value: Any) -> str | None:
         except json.JSONDecodeError:
             return None
         return _extract_parent_condition(parsed)
+    return None
+
+
+def _extract_structured_content(value: Any) -> dict[str, Any] | None:
+    if isinstance(value, dict):
+        structured = value.get("structuredContent")
+        if isinstance(structured, dict):
+            return structured
+        for item in value.values():
+            found = _extract_structured_content(item)
+            if found:
+                return found
+        return None
+    if isinstance(value, list):
+        for item in value:
+            found = _extract_structured_content(item)
+            if found:
+                return found
+        return None
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return None
+        if isinstance(parsed, dict):
+            return parsed
     return None

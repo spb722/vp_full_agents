@@ -1,0 +1,4 @@
+NL Input,Expected Output
+Data revenue decline comparing 2 months ago vs last month,(M2_Data_Revenue - M1_Data_Revenue) / M1_Data_Revenue * 100 ${operator} ${value}
+Show the percentage decline in data revenue from M2 to M1,(M2_Data_Revenue - M1_Data_Revenue) / M1_Data_Revenue * 100 ${operator} ${value}
+Compare last month's data revenue with two months ago and calculate the downlift percentage,(M2_Data_Revenue - M1_Data_Revenue) / M1_Data_Revenue * 100 ${operator} ${value}

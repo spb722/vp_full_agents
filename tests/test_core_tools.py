@@ -7,13 +7,20 @@ import sys
 import asyncio
 
 from vp_agent.config import PROJECT_DIR
+from vp_agent.domain_config import date_column_for_group
 from vp_agent.golden import DEFAULT_GOLDEN_PATH, condition_column, find_360_snapshot_cases, has_date_condition, load_golden_cases
 from vp_agent.tools.normalize import normalize_slots
 from vp_agent.tools.plan import build_condition_plan, build_parent_condition, is_customer_360_snapshot
 from vp_agent.tools.render import render_condition
-from vp_agent.tools.retrieve import retrieve_columns
+from vp_agent.tools.retrieve import (
+    build_retrieval_audit,
+    compact_retrieval_page,
+    retrieve_columns,
+    serialize_retrieval_audit,
+)
+from vp_agent.tools.retrieve_vps import retrieve_existing_vps
 from vp_agent.tools.router import route_table
-from vp_agent.tools.seed import select_seed
+from vp_agent.tools.seed import build_seed_audit, select_seed, serialize_seed_audit
 from vp_agent.tools.shelf import shelf_lookup
 from vp_agent.tools.validate import validate_rule
 
@@ -34,6 +41,11 @@ def test_orchestrator_uses_agentic_emission_and_disallows_bash():
     from vp_agent.orchestrator import ORCHESTRATOR_APPEND, build_options
 
     assert "Agentic emission is the only path" in ORCHESTRATOR_APPEND
+    assert "Load skills in two stages" in ORCHESTRATOR_APPEND
+    assert "ALWAYS load these two first" in ORCHESTRATOR_APPEND
+    assert "Load a further skill ONLY when" in ORCHESTRATOR_APPEND
+    assert "Reference files are Read only on demand" in ORCHESTRATOR_APPEND
+    assert "references/operator-catalog.md: Read before emitting any NON-comparison" in ORCHESTRATOR_APPEND
     assert "There is no deterministic plan step" in ORCHESTRATOR_APPEND
     assert "template  = the complete string you composed" in ORCHESTRATOR_APPEND
     assert "main KPI column's group_name" in ORCHESTRATOR_APPEND
@@ -52,13 +64,15 @@ def test_orchestrator_uses_agentic_emission_and_disallows_bash():
     assert "Bash" in options.disallowed_tools
     for tool in (
         "mcp__vp__build_condition_plan",
-        "mcp__vp__select_seed",
         "mcp__vp__route_table",
     ):
         assert tool not in options.allowed_tools
     for tool in (
         "mcp__vp__retrieve_columns",
+        "mcp__vp__retrieve_existing_vps",
         "mcp__vp__shelf_lookup",
+        "mcp__vp__select_seed",
+        "mcp__vp__record_resolution",
         "mcp__vp__render_condition",
         "mcp__vp__validate_rule",
     ):
@@ -168,6 +182,55 @@ def test_api_request_id_generation_and_session_default():
     request = VPBuildRequest(client="omantel", sentence="Data revenue for smartphone users")
 
     assert len(_request_id(request)) == 10
+
+
+def test_api_returns_structured_agent_resolution(monkeypatch):
+    import vp_agent.api as api_module
+    from vp_agent.schemas import ToolState
+
+    condition = "(M2_Data_Revenue - M1_Data_Revenue) / M1_Data_Revenue * 100 ${operator} ${value}"
+    state = ToolState(
+        render_seen=True,
+        rendered_parent_condition=condition,
+        resolution={
+            "slots": {
+                "kpi_phrase": "data revenue",
+                "aggregate": "FORMULA",
+                "comparison": {"older_period": "M2", "newer_period": "M1"},
+            },
+            "selected_columns": ["COMMON_Data_Revenue"],
+            "selected_vps": ["M2_Data_Revenue", "M1_Data_Revenue"],
+            "seed_id": "S77_percentage_drop",
+            "path": "variant_3",
+            "snapshot": False,
+            "dependencies": [],
+        },
+        selected_seed="S77_percentage_drop",
+        validation={"ok": True, "warnings": [], "referenced_columns": []},
+    )
+
+    async def fake_run_request(*args, **kwargs):
+        if False:
+            yield None
+
+    monkeypatch.setattr(api_module, "ToolState", lambda **kwargs: state)
+    monkeypatch.setattr(api_module, "run_request", fake_run_request)
+
+    response = asyncio.run(
+        api_module._build_agentic(
+            api_module.VPBuildRequest(
+                client="omantel",
+                sentence="Data revenue decline comparing 2 months ago vs last month",
+            )
+        )
+    )
+
+    assert response.parent_condition == condition
+    assert response.selected_columns == ["COMMON_Data_Revenue"]
+    assert response.selected_vps == ["M2_Data_Revenue", "M1_Data_Revenue"]
+    assert response.seed == "S77_percentage_drop"
+    assert response.path == "variant_3"
+    assert response.validation["ok"] is True
 
 
 def test_api_extracts_parent_condition_from_agent_text():
@@ -346,6 +409,39 @@ def test_api_clarification_prefers_final_labelled_question_over_skill_examples()
     assert "last 30 days" in question
 
 
+def test_api_returns_clean_percentage_of_amount_clarification():
+    from vp_agent.api import _extract_clarification_question
+
+    text = """
+    A skill example asked: threshold over the stated period?
+    I need one clarification: what should the calculated 20% be used for?
+    """
+    question = _extract_clarification_question(
+        text,
+        "To check 20% of recharge amount of prepaid subscribers in the last 2 months",
+    )
+
+    assert question == (
+        "What should the calculated 20% of the recharge amount be compared with or used for? "
+        "For example, should it be compared with a specific threshold or with another amount?"
+    )
+    assert "stated period" not in question
+
+
+def test_stable_percentage_of_amount_gate_requires_missing_comparison():
+    from vp_agent.api import _stable_clarification_question
+
+    ambiguous = _stable_clarification_question(
+        "To check 20% of recharge amount of prepaid subscribers in the last 2 months"
+    )
+    explicit = _stable_clarification_question(
+        "Customers where 20% of recharge amount exceeds the specified threshold"
+    )
+
+    assert ambiguous and ambiguous.startswith("What should the calculated 20%")
+    assert explicit is None
+
+
 def test_post_tool_hook_allows_intermediate_templates():
     from vp_agent.hooks import make_hooks
     from vp_agent.schemas import ToolState
@@ -455,6 +551,93 @@ def test_render_hook_stores_parent_condition_from_text_json():
     assert state.rendered_parent_condition == condition
 
 
+def test_hooks_capture_agent_resolution_seed_vps_and_validation():
+    from vp_agent.hooks import make_hooks
+    from vp_agent.schemas import ToolState
+
+    state = ToolState()
+    hook = make_hooks(state)["PostToolUse"][0].hooks[0]
+    resolution = {
+        "client": "omantel",
+        "slots": {
+            "kpi_phrase": "data revenue",
+            "aggregate": "FORMULA",
+            "comparison": {
+                "metric_intent": "percentage decline",
+                "older_period": "M2",
+                "newer_period": "M1",
+            },
+        },
+        "selected_columns": ["COMMON_Data_Revenue"],
+        "selected_vps": ["M2_Data_Revenue", "M1_Data_Revenue"],
+        "seed_id": "S77_percentage_drop",
+        "path": "variant_3",
+        "snapshot": False,
+        "dependencies": [],
+    }
+
+    asyncio.run(
+        hook(
+            {
+                "tool_name": "mcp__vp__record_resolution",
+                "tool_input": resolution,
+                "tool_response": {"structuredContent": resolution},
+            },
+            "tool-resolution",
+            {"signal": None},
+        )
+    )
+    asyncio.run(
+        hook(
+            {
+                "tool_name": "mcp__vp__select_seed",
+                "tool_input": {"client": "omantel"},
+                    "tool_response": {
+                        "structuredContent": {
+                            "audit_id": "seed-audit",
+                            "proposed_selected_seed": {"seed_id": "S77_percentage_drop"},
+                        }
+                    },
+            },
+            "tool-seed",
+            {"signal": None},
+        )
+    )
+    asyncio.run(
+        hook(
+            {
+                "tool_name": "mcp__vp__retrieve_existing_vps",
+                "tool_input": {"client": "omantel", "query": "M1 data revenue"},
+                "tool_response": {
+                    "structuredContent": {
+                        "candidates": [{"name": "M1_Data_Revenue", "parent_condition": "evidence"}]
+                    }
+                },
+            },
+            "tool-vps",
+            {"signal": None},
+        )
+    )
+    validation = {"ok": True, "warnings": [], "referenced_columns": []}
+    asyncio.run(
+        hook(
+            {
+                "tool_name": "mcp__vp__validate_rule",
+                "tool_input": {"client": "omantel"},
+                "tool_response": {"structuredContent": validation},
+            },
+            "tool-validation",
+            {"signal": None},
+        )
+    )
+
+    assert state.resolution == resolution
+    assert state.selected_seed == "S77_percentage_drop"
+    assert state.seed_audit_ids == ["seed-audit"]
+    assert state.existing_vp_candidates[0]["name"] == "M1_Data_Revenue"
+    assert state.validation == validation
+
+
 def test_post_tool_hook_warns_for_non_render_parent_condition_without_denying():
     from vp_agent.hooks import make_hooks
     from vp_agent.schemas import ToolState
@@ -503,6 +686,7 @@ def test_verifier_uses_golden_examples_skill():
 
     assert set(agents) == {"verifier"}
     assert "vp-golden-examples" in agents["verifier"].skills
+    assert "vp-metrics-comparison" in agents["verifier"].skills
 
 
 def test_verifier_prompt_lives_under_claude_agents():
@@ -587,6 +771,84 @@ def test_retrieve_diversifies_filter_candidates():
     assert {"CUST_360_HANDSET_TYPE", "Profile_Cdr_Handset_Type"} & names
 
 
+def test_retrieve_defaults_to_five_candidates():
+    candidates = retrieve_columns(
+        {"domain": "usage", "kpi_phrase": "data revenue", "time_token": "2D"},
+        client="omantel",
+    )
+
+    assert 0 < len(candidates) <= 5
+
+
+def test_role_aware_batch_returns_compact_candidates_per_role():
+    slots = {
+        "raw_request": "Total pay-as-you-go data used on the local network by smartphone users over last 3 months",
+        "domain": "usage",
+        "kpi_phrase": "local pay as you go data usage",
+        "aggregate": "SUM",
+        "time_token": "M3",
+        "filters": [{"phrase": "smartphone users", "operator": "=", "value": "smartphone"}],
+    }
+    audit = build_retrieval_audit(slots, client="omantel")
+    result = compact_retrieval_page(audit, audit_id="audit-1")
+
+    assert result["metric_candidates"][0]["feature_name"] == "COMMON_Data_Local_PayG_Volume"
+    assert len(result["metric_candidates"]) <= 5
+    assert len(result["filter_candidates"]) == 1
+    assert len(result["filter_candidates"][0]["candidates"]) <= 5
+    assert set(result["metric_candidates"][0]) == {
+        "candidate_id",
+        "feature_name",
+        "group_name",
+        "data_type",
+        "description",
+        "time_window_support",
+        "score",
+        "evidence",
+    }
+    assert "bm25_score" not in result["metric_candidates"][0]
+    assert len(serialize_retrieval_audit(audit)["roles"]["metric"]["ranking"]) > 5
+
+
+def test_targeted_retrieval_expansion_reuses_ranked_audit_pages():
+    slots = {"domain": "usage", "kpi_phrase": "data revenue", "aggregate": "SUM", "time_token": "2D"}
+    audit = build_retrieval_audit(slots, client="omantel")
+    first = compact_retrieval_page(audit, audit_id="audit-2", role_ids=["metric"], page=1)
+    second = compact_retrieval_page(audit, audit_id="audit-2", role_ids=["metric"], page=2)
+
+    first_ids = {item["candidate_id"] for item in first["metric_candidates"]}
+    second_ids = {item["candidate_id"] for item in second["metric_candidates"]}
+    assert first_ids
+    assert second_ids
+    assert first_ids.isdisjoint(second_ids)
+
+
+def test_group_date_configuration_and_subscription_override():
+    assert date_column_for_group("Instant_cdr_group") == "FCT_DT"
+    assert date_column_for_group("Common_Seg_Fct") == "COMMON_Event_Date"
+    assert date_column_for_group("Subscriptions", {"raw_request": "subscription purchase"}) == "SUBSCRIPTIONS_DT"
+    assert date_column_for_group("Subscriptions", {"raw_request": "subscription cancellation events"}) == "SUBSCRIPTIONS_EVENT_DATE"
+    assert date_column_for_group("LIFECYCLE_CDR") == "L_SENT_DATE"
+
+
+def test_week_token_aliases_keep_reviewed_four_week_average_snapshot_in_top_five():
+    slots = {
+        "raw_request": "average revenue from all international outgoing calls over last 4 weeks",
+        "domain": "usage",
+        "kpi_phrase": "average revenue from international outgoing (IDD) calls",
+        "aggregate": "AVG",
+        "time_token": "W4",
+        "filters": [],
+    }
+    result = compact_retrieval_page(build_retrieval_audit(slots, "omantel"), audit_id="audit-w4")
+    candidates = result["metric_candidates"]
+    names = {item["feature_name"] for item in candidates}
+
+    assert "CUST_360_VOICE_REVENUE_IDD_FINANCE_REV_4W_AVG" in names
+    snapshot = next(item for item in candidates if item["feature_name"] == "CUST_360_VOICE_REVENUE_IDD_FINANCE_REV_4W_AVG")
+    assert snapshot["time_window_support"] == "exact W4 snapshot"
+
+
 def test_shelf_lookup_prefers_360_for_recharge_amount_30d():
     result = shelf_lookup("recharge amount 30 days", client="omantel")
 
@@ -619,8 +881,12 @@ def test_select_seed_uses_raw_for_precomputed_360_kpi():
 
     result = select_seed(slots, client="omantel", columns=columns, table="360_PROFILE")
 
-    assert result["selected"]["seed_id"] == "S161_raw_kpi_no_time"
-    assert result["selected"]["suggested_variables"]["kpi_col"] == "CUST_360_RECHARGE_AMOUNT_30D"
+    selected = result["proposed_selected_seed"]
+    assert selected["seed_id"] == "S161_raw_kpi_no_time"
+    assert selected["suggested_variables"]["kpi_col"] == "CUST_360_RECHARGE_AMOUNT_30D"
+    assert "selection_signature" in selected
+    assert all("selection_signature" not in item for item in result["alternatives"])
+    assert len(result["alternatives"]) <= 3
 
 
 def test_select_seed_uses_bounded_days_for_event_recharge():
@@ -641,10 +907,11 @@ def test_select_seed_uses_bounded_days_for_event_recharge():
 
     result = select_seed(slots, client="omantel", columns=columns, table="Recharge_Seg_Fct")
 
-    assert result["selected"]["seed_id"] == "S05_last_n_days_bounded"
-    assert result["selected"]["suggested_variables"]["N"] == 30
-    assert result["selected"]["suggested_variables"]["kpi_col"] == "RECHARGE_Denomination"
-    assert result["selected"]["suggested_variables"]["date_col"] == "RECHARGE_Event_Date"
+    selected = result["proposed_selected_seed"]
+    assert selected["seed_id"] == "S05_last_n_days_bounded"
+    assert selected["suggested_variables"]["N"] == 30
+    assert selected["suggested_variables"]["kpi_col"] == "RECHARGE_Denomination"
+    assert selected["suggested_variables"]["date_col"] == "RECHARGE_Event_Date"
 
 
 def test_select_seed_uses_airtel_notnull_data_usage_window():
@@ -665,9 +932,66 @@ def test_select_seed_uses_airtel_notnull_data_usage_window():
 
     result = select_seed(slots, client="airtel", columns=columns, table="Common_Seg_Fct")
 
-    assert result["selected"]["seed_id"] in {"S06_last_n_days_bounded_notnull", "S124_airtel_data_usage_extended_bounded"}
-    assert result["selected"]["suggested_variables"]["kpi_col"] == "S_TOTAL_DATA_USAGE"
-    assert result["selected"]["suggested_variables"]["date_col"] == "S_FCT_DT"
+    selected = result["proposed_selected_seed"]
+    assert selected["seed_id"] in {"S06_last_n_days_bounded_notnull", "S124_airtel_data_usage_extended_bounded"}
+    assert selected["suggested_variables"]["kpi_col"] == "S_TOTAL_DATA_USAGE"
+    assert selected["suggested_variables"]["date_col"] == "S_FCT_DT"
+
+
+def test_retrieve_existing_vps_finds_atomic_data_revenue_helpers():
+    m1 = retrieve_existing_vps("M1 data revenue", client="omantel", top_k=5)
+    m2 = retrieve_existing_vps("M2 data revenue", client="omantel", top_k=5)
+
+    assert m1[0]["name"] == "M1_Data_Revenue"
+    assert m2[0]["name"] == "M2_Data_Revenue"
+    assert "CurrentMonth-1MONTHS" in m1[0]["parent_condition"]
+    assert "CurrentMonth-2MONTHS" in m2[0]["parent_condition"]
+
+
+def test_select_seed_uses_agent_extracted_period_comparison_as_evidence():
+    slots = {
+        "raw_request": "Data revenue decline comparing 2 months ago vs last month",
+        "domain": "usage",
+        "kpi_phrase": "data revenue decline",
+        "aggregate": "FORMULA",
+        "time_token": "none",
+        "operator": "unknown",
+        "value": "",
+        "filters": [],
+        "comparison": {
+            "metric_intent": "percentage decline",
+            "metric_unit": "percentage",
+            "older_period": "M2",
+            "newer_period": "M1",
+        },
+    }
+
+    result = select_seed(slots, client="omantel", table="360_PROFILE", top_k=5)
+
+    selected = result["proposed_selected_seed"]
+    assert selected["seed_id"] == "S77_percentage_drop"
+    assert "agent-extracted period comparison" in selected["reason"]
+
+    audit = build_seed_audit(slots, client="omantel", table="360_PROFILE")
+    serialized = serialize_seed_audit(audit)
+    assert len(serialized["candidates"]) > 1
+    assert any(item["gate_failures"] for item in serialized["candidates"] if not item["eligible"])
+
+
+def test_s77_renders_reviewed_rakesh_decline_formula():
+    rendered = render_condition(
+        seed_id="S77_percentage_drop",
+        template=None,
+        variables={"older_vp": "M2_Data_Revenue", "newer_vp": "M1_Data_Revenue"},
+        filters=[],
+        client="omantel",
+    )
+
+    rule = rendered["parent_condition"]
+
+    assert rule == "(M2_Data_Revenue - M1_Data_Revenue) / M1_Data_Revenue * 100 ${operator} ${value}"
+    assert "V{" not in rule
+    assert validate_rule(rule, request="Data revenue decline comparing 2 months ago vs last month", table="360_PROFILE")["ok"]
 
 
 def test_render_and_validate_last_n_days_sum():
@@ -693,6 +1017,78 @@ def test_render_and_validate_last_n_days_sum():
     validation = validate_rule(rule, request="Omani smartphone recharge more than 5 last 30 days", table="Recharge_Seg_Fct")
     assert validation["ok"], validation
     assert "RECHARGE_Denomination" in validation["referenced_columns"]
+
+
+def test_render_preserves_complete_virtual_formula_with_empty_variables():
+    rendered = render_condition(
+        seed_id=None,
+        template="V{AVG_WEEKLY_REVENUE}=f{COMMON_OG_Call_Revenue/4} ${operator} ${value}",
+        variables={},
+        filters=[],
+        client="omantel",
+    )
+
+    assert rendered["parent_condition"] == (
+        "V{AVG_WEEKLY_REVENUE}=f{COMMON_OG_Call_Revenue/4} ${operator} ${value}"
+    )
+
+
+def test_render_seed_formula_collapses_template_braces_to_engine_syntax():
+    rendered = render_condition(
+        seed_id="S14_avg_formula_months",
+        template=None,
+        variables={
+            "date_col": "COMMON_Event_Date",
+            "N": 2,
+            "vp_name": "AVG_MONTHLY_REVENUE",
+            "kpi_col": "COMMON_Data_Local_Bundle_Revenue",
+            "divisor": 2,
+        },
+        filters=[],
+        client="omantel",
+    )
+
+    rule = rendered["parent_condition"]
+    assert "V{AVG_MONTHLY_REVENUE}=f{COMMON_Data_Local_Bundle_Revenue/2}" in rule
+    assert "V{{" not in rule
+
+
+def test_generic_voice_revenue_ranks_above_unrequested_specializations():
+    audit = build_retrieval_audit(
+        {
+            "raw_request": "total voice revenue over last 2 days",
+            "domain": "usage",
+            "kpi_phrase": "voice revenue",
+            "aggregate": "SUM",
+            "time_token": "2D",
+            "filters": [],
+        },
+        client="omantel",
+    )
+
+    ranked = audit["roles"]["metric"]["ranking"]
+    names = [item["candidate"].feature_name for item in ranked[:5]]
+    assert names[0] == "Total_Voice_Revenue"
+    assert names.index("Total_Voice_Revenue") < names.index("COMMON_Prepay_Voice_Revenue")
+
+
+def test_generic_total_revenue_candidates_are_not_crowded_out_by_service_snapshots():
+    audit = build_retrieval_audit(
+        {
+            "raw_request": "total revenue of smartphone users in the last 60 days",
+            "domain": "usage",
+            "kpi_phrase": "total revenue",
+            "aggregate": "SUM",
+            "time_token": "60D",
+            "filters": [],
+        },
+        client="omantel",
+    )
+
+    names = [item["candidate"].feature_name for item in audit["roles"]["metric"]["ranking"][:15]]
+    assert "COMMON_Total_Revenue" in names[:5]
+    assert "CUST_360_REVENUE_60D" in names
+    assert names.index("COMMON_Total_Revenue") < names.index("CUST_360_TOTAL_REV_VOICE_60")
 
 
 def test_build_condition_plan_360_path_for_example():
@@ -936,7 +1332,7 @@ def test_snapshot_detector_generalizes_customer_360_windows():
 def test_loads_actual_golden_dataset():
     rows = load_golden_cases(DEFAULT_GOLDEN_PATH)
 
-    assert len(rows) == 56
+    assert len(rows) == 57
     assert set(rows[0]) == {"NL Input", "Expected Output"}
 
 

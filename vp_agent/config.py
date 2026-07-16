@@ -15,6 +15,7 @@ class Settings:
     orchestrator_model: str = "claude-sonnet-5"
     subagent_model: str = "claude-haiku-4-5-20251001"
     max_turns: int = 25
+    variant: str = "optimized"
 
 
 def load_settings() -> Settings:
@@ -23,4 +24,5 @@ def load_settings() -> Settings:
         orchestrator_model=os.environ.get("VP_ORCHESTRATOR_MODEL", Settings.orchestrator_model),
         subagent_model=os.environ.get("VP_SUBAGENT_MODEL", Settings.subagent_model),
         max_turns=int(os.environ.get("VP_MAX_TURNS", "25")),
+        variant=os.environ.get("VP_VARIANT", Settings.variant),
     )

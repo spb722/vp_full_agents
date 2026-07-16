@@ -35,6 +35,7 @@ Claude project memory lives under `.claude/`:
     vp-extraction/
     vp-table-routing/
     vp-variant-selection/
+    vp-metrics-comparison/
     vp-rendering-rules/
     vp-disambiguation/
     vp-golden-examples/
@@ -167,7 +168,14 @@ and search for the request id to isolate one API call from its tool spans.
 
 ## Retrieval
 
-`retrieve_columns` uses a local hybrid ranker:
+One model-facing `retrieve_columns` call now batches the metric, each filter,
+and time compatibility. It returns up to five compact candidates per role. Each
+candidate contains only its id, feature/group/type, short description,
+time-window support, score, and concise evidence. The complete ranking and raw
+score components are written to a Langfuse audit span and retained only in the
+request-scoped tool store for page-2/page-3 targeted expansion.
+
+The underlying local hybrid ranker uses:
 
 - BM25 over feature name, group, type, description, time window, and value
   references.
@@ -192,9 +200,45 @@ replace only the semantic scorer while keeping the BM25/RRF contract stable.
 - 360/raw preference when a precomputed Customer 360 KPI is selected
 - required template-variable coverage
 
-It returns the selected seed, top alternatives, confidence, reasoning, and
-suggested render variables such as `kpi_col`, `date_col`, `N`, `divisor`, and
-`vp_name`.
+It returns one complete `proposed_selected_seed` and up to three compact,
+structurally diverse alternatives. Alternatives omit `selection_signature`.
+Promote an alternative by fetching that one complete audited seed with the
+original `audit_id` and `seed_id`.
+
+Seed ranking is evidence, not a semantic decision. The orchestrator inspects the
+proposal and remains responsible for accepting it, choosing its operands, or
+asking for clarification.
+
+## Baseline versus optimized regression
+
+Run the baseline from an immutable worktree on port 8000 and the optimized
+worktree on port 8001. Do not use `--reload` for the baseline.
+
+```bash
+VP_VARIANT=baseline .venv/bin/python -m uvicorn vp_agent.api:app --host 127.0.0.1 --port 8000
+VP_VARIANT=optimized .venv/bin/python -m uvicorn vp_agent.api:app --host 127.0.0.1 --port 8001
+```
+
+Then run exact cases sequentially:
+
+```bash
+.venv/bin/python scripts/compare_vp_variants.py \
+  --baseline http://127.0.0.1:8000 \
+  --optimized http://127.0.0.1:8001
+```
+
+The harness health-checks both endpoints, rejects matching variant labels,
+checkpoints each full response/request id, and runs baseline then optimized for
+each case with a 15-minute default timeout.
+
+## Variant-3 Metrics
+
+Explicit period comparisons such as uplift, downlift, or percentage decline use
+the reviewed `vp-metrics-comparison` skill. The agent extracts both period roles,
+retrieves existing helper VPs for exact-name reuse, consults the seed catalog,
+records its resolution, renders the final metric, and waits for an independent
+semantic verifier. Python does not detect these requests or assemble their
+formula with phrase-based branching.
 
 ## Condition Planning
 

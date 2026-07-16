@@ -4,24 +4,17 @@ import re
 from typing import Any
 
 from vp_agent.data import load_seed_catalog
+from vp_agent.domain_config import date_column_for_group
 from vp_agent.schemas import SeedCandidate
 from vp_agent.text import phrase_text, tokens
 from vp_agent.tools.retrieval_index import char_ngrams, cosine, expand_tokens
 
 
 TIME_RE = re.compile(r"^(?P<n>\d+)(?P<unit>[dDwWmM])$")
-
-DATE_COL_BY_GROUP = {
-    "Recharge_Seg_Fct": "RECHARGE_Event_Date",
-    "Common_Seg_Fct": "COMMON_Event_Date",
-    "Instant_cdr_group": "created_date",
-}
+PREFIX_TIME_RE = re.compile(r"^(?P<unit>[wWmM])(?P<n>\d+)$")
 
 DATE_COL_BY_PREFIX = {
-    "RECHARGE_": "RECHARGE_Event_Date",
-    "COMMON_": "COMMON_Event_Date",
     "S_": "S_FCT_DT",
-    "I_": "created_date",
 }
 
 COUNT_WORDS = {"count", "number", "frequency", "times", "transactions", "occurrences"}
@@ -29,6 +22,21 @@ AVERAGE_WORDS = {"average", "avg", "mean"}
 METRIC_WORDS = {"uplift", "downlift", "increase", "decrease", "change", "growth"}
 SUM_WORDS = {"sum", "total", "amount", "revenue", "usage", "volume", "spent", "spend"}
 PRESENCE_WORDS = {"exists", "exist", "present", "available", "has"}
+
+
+def _aggregate_intent(value: object) -> str:
+    text = str(value or "").upper()
+    if "FORMULA" in text:
+        return "FORMULA"
+    if "AVERAGE" in text or "AVG" in text:
+        return "AVG"
+    if "COUNT" in text or "NUMBER" in text:
+        return "COUNT"
+    if "MAX" in text:
+        return "MAX"
+    if "SUM" in text or "TOTAL" in text:
+        return "SUM"
+    return text
 
 
 def normalize_time_token(raw: object) -> dict[str, Any]:
@@ -42,7 +50,7 @@ def normalize_time_token(raw: object) -> dict[str, Any]:
         parsed = normalize_time_token(lower.removesuffix("_td"))
         return {**parsed, "raw": token, "till_date": True}
 
-    match = TIME_RE.match(lower)
+    match = TIME_RE.match(lower) or PREFIX_TIME_RE.match(lower)
     if not match:
         return {"raw": token, "required": True, "unit": None, "n": None, "axis_keys": [lower]}
 
@@ -107,7 +115,7 @@ def _kpi_axis_score(seed: dict[str, Any], kpi_phrase: str) -> float:
     axes = seed.get("axes") or {}
     phrase_vec = char_ngrams(kpi_phrase)
     best = 0.0
-    for axis_name in ("kpi", "variant"):
+    for axis_name in ("kpi", "variant", "operands"):
         axis = axes.get(axis_name) or {}
         if not isinstance(axis, dict):
             continue
@@ -120,13 +128,34 @@ def _kpi_axis_score(seed: dict[str, Any], kpi_phrase: str) -> float:
     return best
 
 
-def _intent_score(sig: dict[str, Any], slot_terms: set[str], table: str | None) -> tuple[float, list[str]]:
+def _intent_score(
+    sig: dict[str, Any],
+    slot_terms: set[str],
+    table: str | None,
+    slots: dict[str, Any],
+) -> tuple[float, list[str]]:
     score = 0.0
     reasons: list[str] = []
     agg_type = str(sig.get("agg_type") or "").upper()
     seed_type = str(sig.get("seed_type") or "")
     formula = sig.get("formula") or {}
     guards = sig.get("guards") or {}
+    aggregate = _aggregate_intent(slots.get("aggregate"))
+    comparison = slots.get("comparison")
+
+    if aggregate == "FORMULA":
+        if formula.get("has_formula") or agg_type == "FORMULA":
+            score += 14
+            reasons.append("agent-extracted formula intent")
+        else:
+            score -= 8
+
+    if isinstance(comparison, dict) and comparison:
+        if seed_type in {"derived_metric", "composite"} or formula.get("selection_intent"):
+            score += 22
+            reasons.append("agent-extracted period comparison")
+        else:
+            score -= 12
 
     if slot_terms & AVERAGE_WORDS:
         if formula.get("has_formula") or agg_type == "FORMULA":
@@ -162,7 +191,12 @@ def _intent_score(sig: dict[str, Any], slot_terms: set[str], table: str | None) 
     return score, reasons
 
 
-def _infer_column(columns: list[dict[str, Any]], role: str, table: str | None = None) -> str | None:
+def _infer_column(
+    columns: list[dict[str, Any]],
+    role: str,
+    table: str | None = None,
+    slots: dict[str, Any] | None = None,
+) -> str | None:
     if role in {"kpi_col", "count_col", "col"}:
         for column in columns:
             group = column.get("group_name")
@@ -176,17 +210,23 @@ def _infer_column(columns: list[dict[str, Any]], role: str, table: str | None = 
         return columns[0].get("feature_name") if columns else None
 
     if role == "date_col":
-        for column in columns:
-            if str(column.get("data_type", "")).lower() == "date":
-                return column.get("feature_name")
+        # Airtel's summarized CDR uses an S_ prefix. Other stable group dates
+        # come from domain configuration and do not need retrieval/model tokens.
         for column in columns:
             feature = str(column.get("feature_name") or "")
             for prefix, date_col in DATE_COL_BY_PREFIX.items():
                 if feature.startswith(prefix):
                     return date_col
-            group = column.get("group_name")
-            if group in DATE_COL_BY_GROUP:
-                return DATE_COL_BY_GROUP[group]
+        configured = date_column_for_group(table or "", slots)
+        if configured:
+            return configured
+        for column in columns:
+            configured = date_column_for_group(str(column.get("group_name") or ""), slots)
+            if configured:
+                return configured
+        for column in columns:
+            if str(column.get("data_type", "")).lower() == "date":
+                return column.get("feature_name")
     return None
 
 
@@ -210,7 +250,7 @@ def _suggest_variables(
 
     for role in ("kpi_col", "count_col", "col", "date_col"):
         if role in required_variables:
-            inferred = _infer_column(columns, role, table)
+            inferred = _infer_column(columns, role, table, slots)
             if inferred:
                 variables[role] = inferred
 
@@ -223,13 +263,125 @@ def _suggest_variables(
     return variables
 
 
-def select_seed(
+def _seed_compatibility_failures(
+    seed: dict[str, Any],
+    slots: dict[str, Any],
+    normalized_time: dict[str, Any],
+    table: str | None,
+    missing_variables: list[str],
+) -> list[str]:
+    sig = seed.get("selection_signature") or {}
+    agg_type = str(sig.get("agg_type") or "").upper()
+    seed_type = str(sig.get("seed_type") or "").lower()
+    aggregate = _aggregate_intent(slots.get("aggregate"))
+    comparison_request = aggregate == "FORMULA" or bool(slots.get("comparison"))
+    formula = sig.get("formula") or {}
+    time = sig.get("time") or {}
+    runtime = sig.get("runtime") or {}
+    composition = sig.get("composition") or {}
+    failures: list[str] = []
+
+    formula_compatible = bool(formula.get("has_formula")) or seed_type in {"derived_metric", "composite"}
+    if table == "360_PROFILE" and not comparison_request:
+        if str(seed.get("seed_id") or "") != "S161_raw_kpi_no_time":
+            failures.append("snapshot_requires_generic_raw_seed")
+    else:
+        if aggregate == "FORMULA" and not formula_compatible:
+            failures.append("formula_required")
+        elif aggregate == "AVG" and not (formula_compatible or agg_type == "AVG"):
+            failures.append("average_structure_required")
+        elif aggregate == "COUNT" and agg_type not in {"COUNT", "COUNT_ALL"} and seed_type != "count":
+            failures.append("count_structure_required")
+        elif aggregate == "SUM" and agg_type != "SUM":
+            failures.append("sum_structure_required")
+        elif aggregate == "MAX" and agg_type != "MAX":
+            failures.append("max_structure_required")
+
+    seed_requires_time = bool(time.get("required"))
+    if table == "360_PROFILE":
+        if seed_requires_time:
+            failures.append("snapshot_must_not_add_time_window")
+        if comparison_request and not formula_compatible:
+            failures.append("snapshot_comparison_requires_formula_seed")
+    elif normalized_time["required"]:
+        if not seed_requires_time:
+            failures.append("time_window_required")
+        units = set(time.get("units") or [])
+        normalized_unit = normalized_time.get("unit")
+        if normalized_unit == "MONTH_TO_DATE":
+            if units or time.get("bound_style") != "equality":
+                failures.append("time_unit_mismatch")
+        elif normalized_unit and normalized_unit not in units:
+            failures.append("time_unit_mismatch")
+    elif seed_requires_time:
+        failures.append("time_window_not_requested")
+
+    if normalized_time.get("till_date") and time.get("has_completed_period_upper_bound"):
+        failures.append("till_date_bound_mismatch")
+    if composition.get("can_be_main_condition") is False:
+        failures.append("cannot_be_main_condition")
+
+    output_template = str(seed.get("output_template") or "")
+    uses_runtime_pair = runtime.get("uses_operator_value_placeholders")
+    if uses_runtime_pair is False or "${operator} ${value}" not in output_template:
+        failures.append("runtime_operator_value_required")
+
+    deferred_dependency_roles = {"older_vp", "newer_vp", "left_vp", "right_vp"}
+    unresolved_required = [name for name in missing_variables if name not in deferred_dependency_roles]
+    if unresolved_required:
+        failures.append("missing_required_variables:" + ",".join(unresolved_required))
+    return failures
+
+
+def _structural_summary(signature: dict[str, Any]) -> str:
+    time = signature.get("time") or {}
+    formula = signature.get("formula") or {}
+    guards = signature.get("guards") or {}
+    groupby = signature.get("groupby") or {}
+    join = signature.get("join") or {}
+    parts = [str(signature.get("agg_type") or signature.get("seed_type") or "unknown")]
+    if time.get("required"):
+        units = "/".join(map(str, time.get("units") or [])) or "time"
+        parts.append(f"{time.get('bound_style') or 'window'} {units}")
+    if formula.get("has_formula"):
+        parts.append(str(formula.get("formula_type") or "formula"))
+    if guards.get("has_not_null_guard") or guards.get("not_null_guard"):
+        parts.append("not-null guard")
+    if groupby.get("required"):
+        parts.append("groupby")
+    if join.get("required"):
+        parts.append("join")
+    return "; ".join(parts)
+
+
+def _structural_fingerprint(signature: dict[str, Any]) -> tuple[Any, ...]:
+    time = signature.get("time") or {}
+    formula = signature.get("formula") or {}
+    guards = signature.get("guards") or {}
+    return (
+        signature.get("agg_type"),
+        time.get("required"),
+        time.get("bound_style"),
+        tuple(time.get("units") or []),
+        formula.get("has_formula"),
+        formula.get("formula_type"),
+        guards.get("has_not_null_guard") or guards.get("not_null_guard"),
+        (signature.get("groupby") or {}).get("required"),
+        (signature.get("join") or {}).get("required"),
+    )
+
+
+def _concise_seed_evidence(reason: str) -> str:
+    useful = [part.strip() for part in reason.split(";") if part.strip()]
+    return "; ".join(useful[:4])
+
+
+def build_seed_audit(
     slots: dict[str, Any],
     client: str,
     columns: list[dict[str, Any]] | None = None,
     table: str | None = None,
     exclude: list[str] | None = None,
-    top_k: int = 5,
 ) -> dict[str, Any]:
     client = client.lower().strip()
     exclude_set = set(exclude or [])
@@ -240,7 +392,7 @@ def select_seed(
     slot_terms = set(expand_tokens(tokens(query_text)))
     query_vec = char_ngrams(query_text)
 
-    candidates: list[SeedCandidate] = []
+    candidates: list[dict[str, Any]] = []
     for seed in load_seed_catalog().get("seeds", []):
         seed_id = str(seed.get("seed_id") or "")
         if seed_id in exclude_set:
@@ -305,7 +457,7 @@ def select_seed(
         if semantic:
             reasons.append(f"semantic {semantic:.2f}")
 
-        intent, intent_reasons = _intent_score(sig, slot_terms, table)
+        intent, intent_reasons = _intent_score(sig, slot_terms, table, slots)
         score += intent
         reasons.extend(intent_reasons)
 
@@ -326,11 +478,7 @@ def select_seed(
             score += 4
             reasons.append("variables inferred")
 
-        if score <= 0:
-            continue
-
-        candidates.append(
-            SeedCandidate(
+        candidate = SeedCandidate(
                 seed_id=seed_id,
                 description=str(seed.get("description") or ""),
                 client=seed_client,
@@ -342,23 +490,115 @@ def select_seed(
                 suggested_variables=suggested,
                 selection_signature=sig,
             )
+        failures = _seed_compatibility_failures(seed, slots, normalized_time, table, missing)
+        candidates.append(
+            {
+                **candidate.__dict__,
+                "eligible": not failures,
+                "gate_failures": failures,
+                "structural_summary": _structural_summary(sig),
+                "structural_fingerprint": _structural_fingerprint(sig),
+            }
         )
 
-    candidates.sort(key=lambda item: item.score, reverse=True)
-    top = candidates[:top_k]
-    if not top:
-        return {"selected": None, "candidates": [], "normalized_time": normalized_time}
+    candidates.sort(key=lambda item: (item["eligible"], item["score"]), reverse=True)
+    for raw_rank, candidate in enumerate(candidates, start=1):
+        candidate["raw_rank"] = raw_rank
+    eligible = [item for item in candidates if item["eligible"]]
+    if not eligible:
+        return {
+            "client": client,
+            "slots": slots,
+            "table": table,
+            "normalized_time": normalized_time,
+            "candidates": candidates,
+        }
 
-    best = top[0].score
-    second = top[1].score if len(top) > 1 else 0.0
+    best = eligible[0]["score"]
+    second = eligible[1]["score"] if len(eligible) > 1 else 0.0
     margin = min((best - second) / max(best, 1.0), 0.24)
-    normalized_top = []
-    for candidate in top:
-        confidence = max(0.05, min(0.99, (candidate.score / max(best, 1.0)) * (0.75 + margin)))
-        normalized_top.append({**candidate.__dict__, "confidence": confidence})
-
+    for candidate in candidates:
+        candidate["confidence"] = max(
+            0.05,
+            min(0.99, (candidate["score"] / max(best, 1.0)) * (0.75 + margin)),
+        )
     return {
-        "selected": normalized_top[0],
-        "candidates": normalized_top,
+        "client": client,
+        "slots": slots,
+        "table": table,
         "normalized_time": normalized_time,
+        "candidates": candidates,
     }
+
+
+def compact_seed_selection(audit: dict[str, Any], *, audit_id: str) -> dict[str, Any]:
+    eligible = [item for item in audit["candidates"] if item["eligible"]]
+    if not eligible:
+        return {
+            "audit_id": audit_id,
+            "proposed_selected_seed": None,
+            "alternatives": [],
+            "normalized_time": audit["normalized_time"],
+            "unresolved_reason": "no structurally compatible seed",
+        }
+
+    selected = eligible[0]
+    selected_response = {
+        key: value
+        for key, value in selected.items()
+        if key not in {"eligible", "gate_failures", "structural_fingerprint"}
+    }
+    alternatives: list[dict[str, Any]] = []
+    seen_structures = {selected["structural_fingerprint"]}
+    for candidate in eligible[1:]:
+        fingerprint = candidate["structural_fingerprint"]
+        if fingerprint in seen_structures:
+            continue
+        alternatives.append(
+            {
+                "seed_id": candidate["seed_id"],
+                "raw_rank": candidate["raw_rank"],
+                "description": candidate["description"],
+                "score": round(candidate["score"], 3),
+                "confidence": round(candidate["confidence"], 3),
+                "structural_difference": candidate["structural_summary"],
+                "evidence": _concise_seed_evidence(candidate["reason"]),
+            }
+        )
+        seen_structures.add(fingerprint)
+        if len(alternatives) == 3:
+            break
+    return {
+        "audit_id": audit_id,
+        "proposed_selected_seed": selected_response,
+        "alternatives": alternatives,
+        "normalized_time": audit["normalized_time"],
+    }
+
+
+def serialize_seed_audit(audit: dict[str, Any]) -> dict[str, Any]:
+    result = dict(audit)
+    result["candidates"] = [
+        {
+            key: value
+            for key, value in candidate.items()
+            if key != "structural_fingerprint"
+        }
+        for candidate in audit["candidates"]
+    ]
+    return result
+
+
+def select_seed(
+    slots: dict[str, Any],
+    client: str,
+    columns: list[dict[str, Any]] | None = None,
+    table: str | None = None,
+    exclude: list[str] | None = None,
+    top_k: int = 5,
+) -> dict[str, Any]:
+    # top_k is retained for call compatibility; the optimized contract always
+    # returns one complete proposal plus at most three diverse alternatives.
+    del top_k
+    audit = build_seed_audit(slots, client, columns, table, exclude)
+    return compact_seed_selection(audit, audit_id="local")

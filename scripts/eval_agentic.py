@@ -61,6 +61,8 @@ def buckets(nl_input: str, expected: str) -> list[str]:
         tags.append("range")
     if "<> NULL" in e or "= NULL" in e:
         tags.append("null")
+    if "* 100" in e and len(re.findall(r"\bM\d+[_A-Z]", e)) >= 2:
+        tags.append("variant_3")
     return tags or ["other"]
 
 

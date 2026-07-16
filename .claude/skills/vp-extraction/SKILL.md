@@ -15,6 +15,18 @@ count vs recharge amount, active base, or snapshot period. In particular,
 sentence lists several alternatives for the same attribute, merge them into a
 single membership predicate.
 
+Keep explicit metric qualifiers inside `kpi_phrase`: service (data/voice/SMS),
+measure (revenue/usage/count), direction (incoming/outgoing), scope
+(local/onnet/offnet/IDD/roaming), and charging family (PAYG/bundle/free/finance).
+Put subscriber constraints such as handset, status, tenure, nationality, line
+type, and product id in independent filter predicates.
+
+When a secondary KPI/filter grammatically refers to the same service event as
+the main KPI, retain the shared direction/scope in that predicate. For example,
+"outgoing international SMS ... where bundled SMS count equals 2" keeps
+outgoing + international on both the revenue metric and the bundled-SMS-count
+predicate. Do not broaden the secondary KPI to all outgoing SMS.
+
 Required fields:
 
 - `raw_request`: original sentence.
@@ -23,6 +35,9 @@ Required fields:
 - `kpi_phrase`: the main measurable KPI phrase.
 - `time_token`: normalized time, such as `30D`, `M1`, `M3`, `MTD`, `W1`,
   or `none`.
+- `comparison`: for an explicit period-comparison request, an object containing
+  `metric_intent`, `metric_unit`, `older_period`, and `newer_period`. Keep the
+  two period roles separate; do not collapse them into the single `time_token`.
 - `operator`: the main-KPI comparison intent, such as `>`, `>=`, `=`, `<`,
   `<=`, or `unknown`.
 - `value`: the threshold/category value, or empty when the main KPI should keep
@@ -34,44 +49,15 @@ Required fields:
 
 ## Filters are predicates
 
-Emit each filter as `{"phrase", "operator", "value"}`, where `operator` names an
-operator family and `value` carries the operand(s). The supported operators and
-their exact rendering live in the operator catalog
-(`vp-rendering-rules/references/operator-catalog.md`); only use operators listed
-there. Operator families:
+Emit `{"phrase", "operator", "value"}`. Use a scalar for comparison, a JSON
+list for membership, a two-value list for range, null for presence, and one
+string for pattern. Same-attribute alternatives become one membership filter;
+different attributes remain separate filters. Preserve stated codes/values and
+multi-word members. Do not invent syntax or values.
 
-- Comparison — one scalar value.
-  `{"phrase": "on network more than 300 days", "operator": ">", "value": "300"}`
-- Membership — a list value (JSON array). Use for "A or B", comma lists, id/code
-  lists, "any of", "one of".
-  `{"phrase": "product 123 or 125", "operator": "IN LIST", "value": ["123","125"]}`
-  Negated only when explicit: `"operator": "NOT IN LIST"`.
-- Range — a two-element `[low, high]` value, for "between X and Y", "from X to Y".
-  `{"phrase": "age between 18 and 35", "operator": "IN RANGE", "value": ["18","35"]}`
-- Null / presence — no operand, for "has a recharge date", "was ever bonused".
-  `{"phrase": "has last recharge date", "operator": "<> NULL", "value": null}`
-- Pattern — one pattern string, for "name starts with", "id contains".
-
-If a request needs an operator NOT present in the catalog, do not invent a
-token. Set `needs_clarification=true` and ask in plain English.
-
-## Same attribute vs different attributes
-
-- Alternatives for the SAME attribute -> ONE membership predicate.
-  "smartphone or iPhone" -> `IN LIST ["smartphone","iPhone"]`.
-- Constraints on DIFFERENT attributes -> separate predicates joined later by AND.
-  "prepaid smartphone users" -> line type = prepaid AND handset = smartphone.
-  This is NOT a list.
-
-## Values
-
-- Keep id/codes as-is: `["123","125"]`, `["AR38","MD40"]`.
-- Keep categorical words as the user said them; the resolver maps them to the
-  canonical column value (e.g. "smartphone" -> handset `SP`). Do not invent
-  values that were not stated.
-- Preserve multi-word values as one array element: `["feature phone","smartphone"]`.
-- Do not build the final `(a;b)` / `IN LIST` string yourself. Produce operands;
-  the renderer emits syntax.
+Read [references/predicate-cases.md](references/predicate-cases.md) only for a
+non-comparison operator or ambiguous operand shape. Use only confirmed operators
+from `vp-rendering-rules/references/operator-catalog.md`; otherwise clarify.
 
 ## Clarification discipline
 
@@ -103,20 +89,14 @@ wording, independently of the period.
 
 - "count of / number of X" -> COUNT.
 - "total X" -> SUM.
+- Explicit uplift, downlift, decline, growth, ratio, percentage change, or a
+  mathematical comparison between two stated periods -> FORMULA and a populated
+  `comparison` object. A plain mention of two periods is not automatically a
+  metric; interpret what relationship the user requested.
 - When a COUNT/SUM KPI has NO stated period (`time_token = none`), the aggregate
   must be a raw `COUNT_ALL(...)` / `SUM(...)` over the event column. Do not let
   the resolver substitute a precomputed period snapshot such as `_90D`/`_30D`;
   those are only valid when the user stated that exact period.
 
-Worked example (previously mis-handled):
-"count of recharges performed by customers using feature phones, smartphones,
-who are active subscribers and on the network more than 300 days"
-- filter: handset type `IN LIST ["feature phone","smartphone"]`
-- filter: subscriber status `= active`
-- filter: `AON > 300`  (tenure, NOT a window)
-- kpi_phrase: "recharge count"; aggregate: COUNT; `time_token: none`
-- expected shape: `... AND COUNT_ALL(Recharge_count) ${operator} ${value}`
-  (no snapshot, no date bound)
-
-See [references/predicate-cases.md](references/predicate-cases.md) for worked
-examples across every operator family.
+Read [references/time-token-cases.md](references/time-token-cases.md) when a
+duration could be either subscriber tenure or the measured KPI window.

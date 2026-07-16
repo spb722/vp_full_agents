@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from typing import Any
+import re
 
 from vp_agent.schemas import Candidate
+from vp_agent.domain_config import DOMAIN_GROUP_PREFERENCES, date_column_for_group
 from vp_agent.text import phrase_text, tokens
 from vp_agent.tools.retrieval_index import (
     build_retrieval_index,
@@ -26,7 +28,7 @@ METADATA_TIEBREAKER_WEIGHT = 0.03
 CLIENT_PRIOR_TIEBREAKER_WEIGHT = 0.02
 
 
-def retrieve_columns(slots: dict[str, Any], client: str, exclude: list[str] | None = None, top_k: int = 12) -> list[Candidate]:
+def retrieve_columns(slots: dict[str, Any], client: str, exclude: list[str] | None = None, top_k: int = 5) -> list[Candidate]:
     exclude_set = {item.lower() for item in (exclude or [])}
     query_text = phrase_text(slots)
     query_terms = expand_tokens(tokens(query_text))
@@ -226,3 +228,431 @@ def retrieve_columns(slots: dict[str, Any], client: str, exclude: list[str] | No
             seen_ids.add(candidate.id)
 
     return selected[:top_k]
+
+
+SNAPSHOT_TOKEN_RE = re.compile(
+    r"(^|_)(?:M(?:TD|[1-9]|1[0-2])|LMTD|W[1-9]|FW\d+|\d+D(?:_\d+D)?)(_|$)",
+    re.I,
+)
+
+
+def _short_text(value: object, limit: int = 140) -> str:
+    text = " ".join(str(value or "").split())
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1].rstrip() + "…"
+
+
+def _time_token(slots: dict[str, Any]) -> str:
+    token = str(slots.get("time_token") or "none").strip().upper()
+    return token if token not in {"", "UNKNOWN", "NULL"} else "NONE"
+
+
+def _canonical_time_token(value: object) -> str:
+    token = str(value or "").strip().upper().replace("WK", "W")
+    full_week = re.fullmatch(r"FW(\d+)", token)
+    if full_week:
+        return f"W{full_week.group(1)}"
+    match = re.fullmatch(r"(\d+)W", token)
+    if match:
+        return f"W{match.group(1)}"
+    match = re.fullmatch(r"(\d+)M", token)
+    if match:
+        return f"M{match.group(1)}"
+    return token
+
+
+def _is_snapshot(candidate: Candidate) -> bool:
+    if candidate.group_name != "360_PROFILE":
+        return False
+    return bool(candidate.time_window_value.strip() or SNAPSHOT_TOKEN_RE.search(candidate.feature_name))
+
+
+def _snapshot_matches(candidate: Candidate, requested_time: str) -> bool:
+    if requested_time == "NONE":
+        return False
+    requested_time = _canonical_time_token(requested_time)
+    metadata_time = _canonical_time_token(candidate.time_window_value)
+    if metadata_time:
+        return metadata_time == requested_time
+    feature = candidate.feature_name.upper().replace("WK", "W")
+    aliases = {requested_time}
+    week_match = re.fullmatch(r"W(\d+)", requested_time)
+    if week_match:
+        aliases.add(f"{week_match.group(1)}W")
+    month_match = re.fullmatch(r"M(\d+)", requested_time)
+    if month_match:
+        aliases.add(f"{month_match.group(1)}M")
+    return any(re.search(rf"(^|_){re.escape(alias)}(_|$)", feature) for alias in aliases)
+
+
+def _time_support(candidate: Candidate, slots: dict[str, Any]) -> tuple[str, list[str]]:
+    requested_time = _time_token(slots)
+    snapshot = _is_snapshot(candidate)
+    if requested_time == "NONE":
+        if snapshot:
+            return "period snapshot not requested", ["period_snapshot_without_requested_period"]
+        return "no time window required", []
+    if snapshot:
+        if _snapshot_matches(candidate, requested_time):
+            return f"exact {requested_time} snapshot", []
+        return "snapshot period mismatch", ["snapshot_period_mismatch"]
+    date_column = date_column_for_group(candidate.group_name, slots)
+    if date_column:
+        return "custom rolling window", []
+    return "no configured event date", ["missing_group_date_configuration"]
+
+
+def _role_gate_failures(candidate: Candidate, slots: dict[str, Any], role: str) -> list[str]:
+    failures: list[str] = []
+    data_type = candidate.data_type.lower()
+    aggregate = str(slots.get("aggregate") or "").upper()
+    phrase = str(slots.get("kpi_phrase") or slots.get("metric") or "").lower()
+
+    if role == "metric":
+        if data_type == "date" and not any(term in phrase for term in ("date", "day", "time")):
+            failures.append("metric_requires_non_date_column")
+        if aggregate in {"SUM", "AVG", "MAX", "FORMULA"} and data_type in {"date", "string", "categorical"}:
+            failures.append("aggregate_requires_numeric_metric")
+        feature = candidate.feature_name.upper()
+        if _is_snapshot(candidate):
+            if aggregate == "SUM" and re.search(r"(^|_)(?:MAX|AVG)(_|$)", feature):
+                failures.append("snapshot_aggregate_mismatch")
+            elif aggregate == "AVG" and "AVG" not in feature:
+                # Raw event candidates remain eligible for an average formula;
+                # only a precomputed snapshot must encode AVG explicitly.
+                failures.append("snapshot_average_not_encoded")
+        _, time_failures = _time_support(candidate, slots)
+        failures.extend(time_failures)
+    elif role.startswith("filter:"):
+        operator = str(slots.get("operator") or "").upper()
+        value = slots.get("value")
+        scalar = str(value or "").replace(".", "", 1)
+        if operator in {">", ">=", "<", "<="} and scalar.isdigit() and data_type in {"date", "string", "categorical"}:
+            failures.append("numeric_filter_requires_numeric_column")
+    return list(dict.fromkeys(failures))
+
+
+def _group_preference(candidate: Candidate, slots: dict[str, Any], metric_group: str | None = None) -> float:
+    domain = str(slots.get("domain") or "").lower()
+    preferred = DOMAIN_GROUP_PREFERENCES.get(domain, ())
+    bonus = 0.0
+    if candidate.group_name in preferred:
+        bonus += max(0.0, 0.035 - preferred.index(candidate.group_name) * 0.01)
+    if metric_group and candidate.group_name == metric_group:
+        bonus += 0.025
+    return bonus
+
+
+def _qualifier_adjustment(candidate: Candidate, slots: dict[str, Any]) -> float:
+    """Prefer explicit business families without making them final truth."""
+    query_terms = set(tokens(slots.get("kpi_phrase") or slots.get("metric") or ""))
+    feature_terms = set(tokens(candidate.feature_name.replace("_", " ")))
+    candidate_terms = set(
+        tokens(
+            " ".join(
+                (
+                    candidate.feature_name.replace("_", " "),
+                    candidate.description,
+                    candidate.group_name.replace("_", " "),
+                )
+            )
+        )
+    )
+    adjustment = 0.0
+
+    wants_revenue = bool(query_terms & {"revenue", "spend", "spent", "amount"})
+    wants_usage = bool(query_terms & {"usage", "used", "volume", "mou"}) and not wants_revenue
+    has_revenue = bool(candidate_terms & {"revenue", "rev", "amount"})
+    has_usage = bool(candidate_terms & {"usage", "volume", "mou"})
+    if wants_revenue:
+        adjustment += 0.09 if has_revenue else -0.10
+    elif wants_usage:
+        adjustment += 0.09 if has_usage else -0.12 if has_revenue else 0.0
+
+    service_terms = {
+        "data": {"data"},
+        "voice": {"voice", "call", "calls"},
+        "sms": {"sms", "message", "messages"},
+        "recharge": {"recharge", "topup", "denomination"},
+        "subscription": {"subscription", "subscriptions", "product", "purchase", "purchases"},
+    }
+    requested_services = [name for name, terms_set in service_terms.items() if query_terms & terms_set]
+    for service in requested_services:
+        has_service = bool(candidate_terms & service_terms[service])
+        adjustment += 0.045 if has_service else -0.045
+    if (
+        wants_revenue
+        and not requested_services
+        and not query_terms & {"finance", "financial"}
+        and any(feature_terms & terms_set for terms_set in service_terms.values())
+    ):
+        # A generic "total revenue" request must not be crowded out by voice,
+        # SMS, data, recharge, or subscription specializations merely because
+        # they share the word revenue and the requested period.
+        adjustment -= 0.075
+
+    qualifier_terms = {
+        "local": {"local"},
+        "onnet": {"onnet"},
+        "offnet": {"offnet"},
+        "roaming": {"roaming"},
+        "outgoing": {"outgoing", "og"},
+        "incoming": {"incoming", "ic"},
+        "prepaid": {"prepaid", "prepay"},
+        "postpaid": {"postpaid", "postpay"},
+        "payg": {"payg", "pay", "go"},
+        "bundle": {"bundle", "bundled"},
+        "free": {"free"},
+        "finance": {"finance", "financial"},
+        "international": {"international", "idd"},
+    }
+    for qualifier, aliases in qualifier_terms.items():
+        if query_terms & aliases:
+            adjustment += 0.055 if candidate_terms & aliases else -0.045
+        elif feature_terms & aliases:
+            # Specializations not requested by the marketer stay auditable but
+            # rank below a matching generic KPI family. Use only the feature
+            # name here: generic KPI descriptions often enumerate all scopes
+            # they include and must not be mistaken for a specialization.
+            adjustment -= 0.035
+    return adjustment
+
+
+def _candidate_evidence(candidate: Candidate, slots: dict[str, Any], time_support: str, group_bonus: float) -> str:
+    evidence: list[str] = []
+    if candidate.bm25_norm >= 0.7 and candidate.embedding_norm >= 0.6:
+        evidence.append("Strong lexical and semantic match")
+    elif candidate.bm25_norm >= candidate.embedding_norm:
+        evidence.append("Strong metadata/term match")
+    else:
+        evidence.append("Strong semantic match")
+    if "exact" in time_support:
+        evidence.append(f"supports the requested {_time_token(slots)} period directly")
+    elif time_support == "custom rolling window":
+        date_column = date_column_for_group(candidate.group_name, slots)
+        evidence.append(f"supports the requested window through configured event date {date_column}")
+    if group_bonus:
+        evidence.append("fits the preferred metric/filter group plan")
+    return _short_text("; ".join(evidence) + ".", 180)
+
+
+def compact_candidate(
+    candidate: Candidate,
+    slots: dict[str, Any],
+    *,
+    group_bonus: float = 0.0,
+    qualifier_adjustment: float = 0.0,
+) -> dict[str, Any]:
+    time_support, _ = _time_support(candidate, slots)
+    return {
+        "candidate_id": candidate.id,
+        "feature_name": candidate.feature_name,
+        "group_name": candidate.group_name,
+        "data_type": candidate.data_type,
+        "description": _short_text(candidate.description),
+        "time_window_support": time_support,
+        "score": round(candidate.score + group_bonus + qualifier_adjustment, 3),
+        "evidence": _candidate_evidence(candidate, slots, time_support, group_bonus),
+    }
+
+
+def _rank_role(
+    slots: dict[str, Any],
+    client: str,
+    role: str,
+    exclude: list[str] | None,
+    metric_group: str | None = None,
+) -> list[dict[str, Any]]:
+    # Request a number larger than the metadata corpus so the audit retains the
+    # complete positive-score ranking. Only the compact page enters model context.
+    candidates = retrieve_columns(slots, client=client, exclude=exclude, top_k=10000)
+    ranked: list[dict[str, Any]] = []
+    for raw_rank, candidate in enumerate(candidates, start=1):
+        failures = _role_gate_failures(candidate, slots, role)
+        group_bonus = _group_preference(candidate, slots, metric_group)
+        qualifier_adjustment = _qualifier_adjustment(candidate, slots)
+        ranked.append(
+            {
+                "candidate": candidate,
+                "raw_rank": raw_rank,
+                "eligible": not failures,
+                "gate_failures": failures,
+                "group_bonus": group_bonus,
+                "qualifier_adjustment": qualifier_adjustment,
+                "reranked_score": candidate.score + group_bonus + qualifier_adjustment,
+            }
+        )
+    ranked.sort(
+        key=lambda item: (
+            item["eligible"],
+            item["reranked_score"],
+            -item["raw_rank"],
+        ),
+        reverse=True,
+    )
+    for reranked_rank, item in enumerate(ranked, start=1):
+        item["reranked_rank"] = reranked_rank
+    return ranked
+
+
+def _metric_role_slots(slots: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in slots.items() if key not in {"filters", "negations"}}
+
+
+def _filter_role_slots(slots: dict[str, Any], filter_item: dict[str, Any]) -> dict[str, Any]:
+    phrase = str(filter_item.get("phrase") or filter_item.get("name") or filter_item.get("field") or "")
+    value = filter_item.get("value")
+    return {
+        "raw_request": slots.get("raw_request", ""),
+        "domain": "profile",
+        "kpi_phrase": " ".join(part for part in (phrase, str(value or "")) if part),
+        "time_token": "none",
+        "operator": filter_item.get("operator") or "=",
+        "value": value,
+        "filters": [filter_item],
+    }
+
+
+def _role_id(index: int, filter_item: dict[str, Any]) -> str:
+    phrase = str(filter_item.get("phrase") or filter_item.get("name") or filter_item.get("field") or "filter")
+    slug = "_".join(tokens(phrase)[:4]) or "filter"
+    return f"filter_{index + 1}_{slug}"
+
+
+def build_retrieval_audit(
+    slots: dict[str, Any],
+    client: str,
+    exclude: list[str] | None = None,
+) -> dict[str, Any]:
+    metric_slots = _metric_role_slots(slots)
+    metric_ranking = _rank_role(metric_slots, client, "metric", exclude)
+    eligible_metrics = [item for item in metric_ranking if item["eligible"]]
+    metric_group = eligible_metrics[0]["candidate"].group_name if eligible_metrics else None
+
+    roles: dict[str, dict[str, Any]] = {
+        "metric": {
+            "role": "metric",
+            "phrase": str(slots.get("kpi_phrase") or slots.get("metric") or ""),
+            "slots": metric_slots,
+            "ranking": metric_ranking,
+        }
+    }
+    for index, raw_filter in enumerate(slots.get("filters") or []):
+        filter_item = raw_filter if isinstance(raw_filter, dict) else {"phrase": str(raw_filter), "value": str(raw_filter)}
+        role_id = _role_id(index, filter_item)
+        filter_slots = _filter_role_slots(slots, filter_item)
+        roles[role_id] = {
+            "role": role_id,
+            "phrase": str(filter_item.get("phrase") or ""),
+            "predicate": filter_item,
+            "slots": filter_slots,
+            "ranking": _rank_role(filter_slots, client, role_id, exclude, metric_group),
+        }
+    return {
+        "client": client,
+        "slots": slots,
+        "requested_time": _time_token(slots),
+        "metric_group": metric_group,
+        "roles": roles,
+    }
+
+
+def compact_retrieval_page(
+    audit: dict[str, Any],
+    *,
+    audit_id: str,
+    role_ids: list[str] | None = None,
+    page: int = 1,
+    limit_per_role: int = 5,
+) -> dict[str, Any]:
+    page = max(1, min(page, 3))
+    limit_per_role = max(1, min(limit_per_role, 5))
+    start = (page - 1) * 5
+    stop = start + limit_per_role
+    selected_roles = role_ids or list(audit["roles"])
+
+    metric_candidates: list[dict[str, Any]] = []
+    filter_candidates: list[dict[str, Any]] = []
+    expandable_roles: list[str] = []
+    for role_id in selected_roles:
+        role = audit["roles"].get(role_id)
+        if not role:
+            continue
+        eligible = [item for item in role["ranking"] if item["eligible"]]
+        page_items = eligible[start:stop]
+        compact = [
+            compact_candidate(
+                item["candidate"],
+                role["slots"],
+                group_bonus=item["group_bonus"],
+                qualifier_adjustment=item["qualifier_adjustment"],
+            )
+            for item in page_items
+        ]
+        if len(eligible) > stop and page < 3:
+            expandable_roles.append(role_id)
+        if role_id == "metric":
+            metric_candidates = compact
+        else:
+            filter_candidates.append(
+                {
+                    "role_id": role_id,
+                    "phrase": role["phrase"],
+                    "candidates": compact,
+                }
+            )
+
+    requested_time = audit["requested_time"]
+    primary_time_support = (
+        metric_candidates[0]["time_window_support"]
+        if metric_candidates
+        else "unresolved"
+    )
+    exact_snapshot_found = primary_time_support.startswith("exact ")
+    return {
+        "audit_id": audit_id,
+        "page": page,
+        "metric_candidates": metric_candidates,
+        "filter_candidates": filter_candidates,
+        "time_assessment": {
+            "requested_time": requested_time,
+            "exact_snapshot_found": exact_snapshot_found,
+            "requires_event_date": requested_time != "NONE" and not exact_snapshot_found,
+        },
+        "expandable_roles": expandable_roles,
+    }
+
+
+def serialize_retrieval_audit(audit: dict[str, Any]) -> dict[str, Any]:
+    serialized_roles: dict[str, Any] = {}
+    for role_id, role in audit["roles"].items():
+        ranking = []
+        for item in role["ranking"]:
+            candidate = item["candidate"]
+            ranking.append(
+                {
+                    **candidate.__dict__,
+                    "raw_rank": item["raw_rank"],
+                    "reranked_rank": item["reranked_rank"],
+                    "eligible": item["eligible"],
+                    "gate_failures": item["gate_failures"],
+                    "group_bonus": item["group_bonus"],
+                    "qualifier_adjustment": item["qualifier_adjustment"],
+                    "reranked_score": item["reranked_score"],
+                    "time_window_support": _time_support(candidate, role["slots"])[0],
+                }
+            )
+        serialized_roles[role_id] = {
+            "role": role["role"],
+            "phrase": role["phrase"],
+            "predicate": role.get("predicate"),
+            "ranking": ranking,
+        }
+    return {
+        "client": audit["client"],
+        "slots": audit["slots"],
+        "requested_time": audit["requested_time"],
+        "metric_group": audit["metric_group"],
+        "roles": serialized_roles,
+    }
