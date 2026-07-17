@@ -96,17 +96,7 @@ async def build_vp(request: VPBuildRequest) -> VPBuildResponse:
         },
     ) as span:
         try:
-            stable_clarification = _stable_clarification_question(request.sentence)
-            if stable_clarification:
-                response = _clarification_response(
-                    request,
-                    request_id=request_id,
-                    session_id=session_id,
-                    question=stable_clarification,
-                    source="stable_percentage_of_amount",
-                )
-            else:
-                response = await _build_agentic(request, request_id=request_id, session_id=session_id)
+            response = await _build_agentic(request, request_id=request_id, session_id=session_id)
         except Exception as exc:
             record_exception(span, exc)
             raise
@@ -121,60 +111,6 @@ async def build_vp(request: VPBuildRequest) -> VPBuildResponse:
             },
         )
         return response
-
-
-def _stable_clarification_question(request: str) -> str | None:
-    """Guard a small reviewed ambiguity primitive before expensive orchestration."""
-    percentage_amount = re.search(
-        r"\b(\d+(?:\.\d+)?)\s*%\s+of\s+(?:the\s+)?(?:recharge\s+)?amount\b",
-        request,
-        flags=re.I,
-    )
-    if not percentage_amount:
-        return None
-    explicit_comparison = re.search(
-        r"\b(?:greater than|more than|less than|at least|at most|equal(?:s| to)?|above|below|exceeds?|under)\b",
-        request,
-        flags=re.I,
-    )
-    if explicit_comparison:
-        return None
-    percentage = percentage_amount.group(1)
-    return (
-        f"What should the calculated {percentage}% of the recharge amount be compared with or used for? "
-        "For example, should it be compared with a specific threshold or with another amount?"
-    )
-
-
-def _clarification_response(
-    request: VPBuildRequest,
-    *,
-    request_id: str,
-    session_id: str,
-    question: str,
-    source: str,
-) -> VPBuildResponse:
-    settings = load_settings()
-    trace_state = ToolState(request_id=request_id, console_trace=console_trace_enabled())
-    log_line(trace_state, f"Stable clarification: client={request.client}, source={source}")
-    return VPBuildResponse(
-        ok=False,
-        mode="agent",
-        request_id=request_id,
-        session_id=session_id,
-        orchestrator_model=settings.orchestrator_model,
-        subagent_model=settings.subagent_model,
-        client=request.client,
-        sentence=request.sentence,
-        parent_condition=None,
-        slots={"needs_clarification": True, "questions": [question]},
-        raw_text=None,
-        needs_clarification=True,
-        clarification_question=question,
-        failure_reason="Clarification needed before rendering.",
-        diagnostics={"clarification_source": source},
-        warnings=[question],
-    )
 
 
 async def _build_agentic(request: VPBuildRequest, *, request_id: str | None = None, session_id: str | None = None) -> VPBuildResponse:
@@ -192,7 +128,13 @@ async def _build_agentic(request: VPBuildRequest, *, request_id: str | None = No
 
     raw_text = "\n".join(chunk for chunk in chunks if chunk).strip()
     parent_condition = state.rendered_parent_condition or parent_condition or _extract_explicit_parent_condition(raw_text)
-    clarification_question = None if parent_condition else _extract_clarification_question(raw_text, request.sentence)
+    resolution = state.resolution or {}
+    slots = resolution.get("slots") or state.normalized_slots
+    clarification_question = (
+        None
+        if parent_condition
+        else _clarification_question_from_slots(slots) or _extract_clarification_question(raw_text)
+    )
     needs_clarification = bool(clarification_question)
     failure_reason = (
         None
@@ -200,7 +142,6 @@ async def _build_agentic(request: VPBuildRequest, *, request_id: str | None = No
         else "Clarification needed before rendering." if needs_clarification else _missing_parent_condition_reason(state, raw_text, sdk_stderr)
     )
     settings = load_settings()
-    resolution = state.resolution or {}
     validation = state.validation
     selected_columns = list(resolution.get("selected_columns") or [])
     if not selected_columns and isinstance(validation, dict):
@@ -233,7 +174,7 @@ async def _build_agentic(request: VPBuildRequest, *, request_id: str | None = No
         seed=resolution.get("seed_id") or state.selected_seed,
         path=resolution.get("path"),
         snapshot=resolution.get("snapshot"),
-        slots=resolution.get("slots") or state.normalized_slots,
+        slots=slots,
         validation=validation,
         raw_text=raw_text or None,
         needs_clarification=needs_clarification,
@@ -406,24 +347,24 @@ def _looks_like_parent_condition(condition: str) -> bool:
     )
 
 
-def _extract_clarification_question(text: str, request: str = "") -> str | None:
-    if re.search(r"\bhigh[- ]?value|valuable customer|premium customer|high spender\b", request, flags=re.I):
-        return (
-            "When you say high value customers, should that mean customers in an existing High Value segment, "
-            "or customers whose revenue, spend, recharge amount, ARPU, or CLV crosses a threshold? "
-            "If it is threshold-based, please specify which measure and whether the last 30 days should apply to it."
-        )
-    percentage_amount = re.search(
-        r"\b(\d+(?:\.\d+)?)\s*%\s+of\s+(?:the\s+)?(?:recharge\s+)?amount\b",
-        request,
-        flags=re.I,
-    )
-    if percentage_amount:
-        percentage = percentage_amount.group(1)
-        return (
-            f"What should the calculated {percentage}% of the recharge amount be compared with or used for? "
-            "For example, should it be compared with a specific threshold or with another amount?"
-        )
+def _clarification_question_from_slots(slots: object) -> str | None:
+    if not isinstance(slots, dict) or not slots.get("needs_clarification"):
+        return None
+    questions = slots.get("questions")
+    if isinstance(questions, str):
+        questions = [questions]
+    if not isinstance(questions, list):
+        return None
+    for question in questions:
+        if not isinstance(question, str):
+            continue
+        candidate = _dedupe_sentences(_clean_clarification_line(question))[:1000]
+        if candidate and "?" in candidate and not _line_has_internal_terms(candidate):
+            return candidate
+    return None
+
+
+def _extract_clarification_question(text: str) -> str | None:
     if not text:
         return None
     lines = [line.strip() for line in text.splitlines() if line.strip()]
@@ -440,17 +381,14 @@ def _extract_clarification_question(text: str, request: str = "") -> str | None:
     ]
     question_lines = [line for line in question_lines if line]
     if question_lines:
-        return _dedupe_sentences(" ".join(question_lines))[:1000]
-    for index, line in enumerate(search_lines):
+        return _dedupe_sentences(question_lines[-1])[:1000]
+    for index in range(len(search_lines) - 1, -1, -1):
+        line = search_lines[index]
         if re.search(r"clarification needed|clarification question|please clarify", line, flags=re.I):
-            public_lines = [
-                _clean_clarification_line(item)
-                for item in search_lines[index : index + 6]
-                if not _line_has_internal_terms(item)
-            ]
-            public_lines = [line for line in public_lines if line]
-            if public_lines:
-                return _dedupe_sentences(" ".join(public_lines))[:1000]
+            for item in search_lines[index : index + 8]:
+                candidate = _clean_clarification_line(item)
+                if candidate and "?" in candidate and not _line_has_internal_terms(candidate):
+                    return _dedupe_sentences(candidate)[:1000]
     return None
 
 
@@ -471,7 +409,7 @@ def _extract_labelled_clarification_question(lines: list[str]) -> str | None:
 def _line_has_internal_terms(line: str) -> bool:
     return bool(
         re.search(
-            r"\b[A-Z][A-Z0-9_]{2,}\b|PARENT_CONDITION|seed|template|column|table|render|omantel",
+            r"\b[A-Z][A-Z0-9]*_[A-Z0-9_]+\b|\b(?:PARENT_CONDITION|seed|template|column|table|render|omantel)\b",
             line,
         )
     )

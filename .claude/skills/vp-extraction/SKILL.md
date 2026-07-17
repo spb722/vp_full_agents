@@ -38,6 +38,9 @@ Required fields:
 - `comparison`: for an explicit period-comparison request, an object containing
   `metric_intent`, `metric_unit`, `older_period`, and `newer_period`. Keep the
   two period roles separate; do not collapse them into the single `time_token`.
+- `formula`: for a calculated percentage of one named KPI, emit
+  `{"type":"percentage_of_kpi","percentage":N,"factor":N/100}`. This is
+  distinct from a percentage change between periods.
 - `operator`: the main-KPI comparison intent, such as `>`, `>=`, `=`, `<`,
   `<=`, or `unknown`.
 - `value`: the threshold/category value, or empty when the main KPI should keep
@@ -93,6 +96,16 @@ wording, independently of the period.
   mathematical comparison between two stated periods -> FORMULA and a populated
   `comparison` object. A plain mention of two periods is not automatically a
   metric; interpret what relationship the user requested.
+- "N% of recharge amount" or "flat N% of recharge amount" -> FORMULA with
+  `formula.type = percentage_of_kpi`, the stated percentage/factor, and the
+  recharge amount as the KPI. Missing main-KPI threshold is not a clarification;
+  the rendered KPI keeps `${operator} ${value}`. Do not confuse this with "top
+  N% of subscribers" (population ranking), "increased/decreased by N%"
+  (percentage change), or "KPI A is N% of KPI B" (ratio).
+  For Omantel event-window retrieval, normalize this KPI phrase to "recharge
+  denomination" so the reviewed recharge fact family is considered. Keep the
+  aggregate as FORMULA even though the formula seed contains an outer SUM; do
+  not replace it with a plain SUM seed.
 - When a COUNT/SUM KPI has NO stated period (`time_token = none`), the aggregate
   must be a raw `COUNT_ALL(...)` / `SUM(...)` over the event column. Do not let
   the resolver substitute a precomputed period snapshot such as `_90D`/`_30D`;

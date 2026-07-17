@@ -57,6 +57,7 @@ def test_orchestrator_uses_agentic_emission_and_disallows_bash():
     assert "Values stated in the request for non-main KPIs are fixed filters" in ORCHESTRATOR_APPEND
     assert "Do not ask clarification for a missing filter" in ORCHESTRATOR_APPEND
     assert '"high value customer"' in ORCHESTRATOR_APPEND
+    assert "Clarification question: <one batched plain-English question>" in ORCHESTRATOR_APPEND
     assert "Do not search the filesystem" in ORCHESTRATOR_APPEND
 
     options = build_options()
@@ -355,12 +356,15 @@ def test_api_ignores_seed_template_as_parent_condition():
 def test_api_extracts_clarification_question():
     from vp_agent.api import _extract_clarification_question
 
-    text = "Clarification needed:\nShould high value mean a stored customer value segment such as HIGH, or a revenue/spend threshold over the stated period?"
+    text = (
+        "Clarification question: Should high value mean an existing customer value segment, "
+        "or a revenue, spend, recharge amount, ARPU, or CLV threshold over the last 30 days?"
+    )
 
-    question = _extract_clarification_question(text, "high value customers who are smartphone users recorded in the last 30 day")
+    question = _extract_clarification_question(text)
 
-    assert question.startswith("When you say high value customers")
-    assert "existing High Value segment" in question
+    assert question.startswith("Should high value mean")
+    assert "existing customer value segment" in question
     assert "last 30 days" in question
     assert "VALUE_SEGMENT" not in question
     assert "PARENT_CONDITION" not in question
@@ -375,9 +379,11 @@ def test_api_clarification_question_filters_internal_terms():
     1. A stored customer value segment (e.g., `VALUE_SEGMENT_OVERALL = HIGH`), or
     2. A revenue/spend-based KPI over a period, e.g., total revenue, ARPU, recharge amount, or CLV, with a threshold?
     Once I have that, I'll resolve columns, pick the seed/template, and render the validated `PARENT_CONDITION`.
+
+    Clarification question: Should high value mean an existing customer value segment, or a revenue, spend, recharge amount, ARPU, or CLV threshold?
     """
 
-    question = _extract_clarification_question(text, "high value customers who are smartphone users recorded in the last 30 day")
+    question = _extract_clarification_question(text)
 
     assert "VALUE_SEGMENT_OVERALL" not in question
     assert "seed" not in question
@@ -402,44 +408,82 @@ def test_api_clarification_prefers_final_labelled_question_over_skill_examples()
     till date?
     """
 
-    question = _extract_clarification_question(text, "local financial services revenue in Month till date")
+    question = _extract_clarification_question(text)
 
     assert question.startswith('For the "recharged more than 100" condition')
     assert "threshold over the stated period" not in question
     assert "last 30 days" in question
 
 
-def test_api_returns_clean_percentage_of_amount_clarification():
+def test_api_prefers_structured_clarification_question():
+    from vp_agent.api import _clarification_question_from_slots
+
+    question = _clarification_question_from_slots(
+        {
+            "needs_clarification": True,
+            "questions": ["Does 20% refer to the top subscribers by recharge amount, or to another population?"],
+        }
+    )
+
+    assert question == "Does 20% refer to the top subscribers by recharge amount, or to another population?"
+
+
+def test_api_clarification_allows_adjustable_business_threshold():
     from vp_agent.api import _extract_clarification_question
 
-    text = """
-    A skill example asked: threshold over the stated period?
-    I need one clarification: what should the calculated 20% be used for?
-    """
-    question = _extract_clarification_question(
-        text,
-        "To check 20% of recharge amount of prepaid subscribers in the last 2 months",
+    text = (
+        "A skill example asked: threshold over the stated period?\n"
+        "Clarification question: Could you provide the recharge-amount cutoff, "
+        "or should the audience use an adjustable threshold?"
     )
 
-    assert question == (
-        "What should the calculated 20% of the recharge amount be compared with or used for? "
-        "For example, should it be compared with a specific threshold or with another amount?"
-    )
-    assert "stated period" not in question
-
-
-def test_stable_percentage_of_amount_gate_requires_missing_comparison():
-    from vp_agent.api import _stable_clarification_question
-
-    ambiguous = _stable_clarification_question(
-        "To check 20% of recharge amount of prepaid subscribers in the last 2 months"
-    )
-    explicit = _stable_clarification_question(
-        "Customers where 20% of recharge amount exceeds the specified threshold"
+    assert _extract_clarification_question(text) == (
+        "Could you provide the recharge-amount cutoff, or should the audience use an adjustable threshold?"
     )
 
-    assert ambiguous and ambiguous.startswith("What should the calculated 20%")
-    assert explicit is None
+
+def test_api_routes_percentage_request_to_agent(monkeypatch):
+    from contextlib import nullcontext
+
+    import vp_agent.api as api_module
+
+    calls = []
+
+    async def fake_build_agentic(request, *, request_id, session_id):
+        calls.append((request.sentence, request_id, session_id))
+        return api_module.VPBuildResponse(
+            ok=False,
+            request_id=request_id,
+            session_id=session_id,
+            orchestrator_model="test-orchestrator",
+            subagent_model="test-subagent",
+            client=request.client,
+            sentence=request.sentence,
+            failure_reason="test response",
+        )
+
+    monkeypatch.setattr(api_module, "_build_agentic", fake_build_agentic)
+    monkeypatch.setattr(api_module, "observation", lambda *args, **kwargs: nullcontext(None))
+    monkeypatch.setattr(api_module, "update_observation", lambda *args, **kwargs: None)
+
+    response = asyncio.run(
+        api_module.build_vp(
+            api_module.VPBuildRequest(
+                client="omantel",
+                sentence="To check 20% of recharge amount of prepaid subscribers in the last 2 months",
+                request_id="percentage-agent-path",
+            )
+        )
+    )
+
+    assert calls == [
+        (
+            "To check 20% of recharge amount of prepaid subscribers in the last 2 months",
+            "percentage-agent-path",
+            "vp-omantel",
+        )
+    ]
+    assert response.request_id == "percentage-agent-path"
 
 
 def test_post_tool_hook_allows_intermediate_templates():
@@ -912,6 +956,56 @@ def test_select_seed_uses_bounded_days_for_event_recharge():
     assert selected["suggested_variables"]["N"] == 30
     assert selected["suggested_variables"]["kpi_col"] == "RECHARGE_Denomination"
     assert selected["suggested_variables"]["date_col"] == "RECHARGE_Event_Date"
+
+
+def test_select_seed_uses_percentage_formula_for_event_recharge_months():
+    slots = {
+        "raw_request": "Calculate 20% of recharge amount of prepaid subscribers in last 2 months",
+        "domain": "recharge",
+        "kpi_phrase": "recharge denomination",
+        # The formula object remains authoritative even when an agent reports
+        # the outer aggregation as SUM.
+        "aggregate": "SUM",
+        "time_token": "2M",
+        "operator": "unknown",
+        "value": "",
+        "filters": [{"phrase": "line type prepaid", "operator": "=", "value": "Prepaid"}],
+        "formula": {"type": "percentage_of_kpi", "percentage": 20, "factor": 0.2},
+    }
+    columns = [
+        {
+            "feature_name": "RECHARGE_Denomination",
+            "group_name": "Recharge_Seg_Fct",
+            "data_type": "numeric",
+        }
+    ]
+
+    result = select_seed(slots, client="omantel", columns=columns, table="Recharge_Seg_Fct")
+
+    selected = result["proposed_selected_seed"]
+    assert selected["seed_id"] == "S160_percentage_of_kpi_formula_months_lower_only"
+    assert selected["suggested_variables"] == {
+        "N": 2,
+        "kpi_col": "RECHARGE_Denomination",
+        "date_col": "RECHARGE_Event_Date",
+        "factor": 0.2,
+        "vp_name": "RECHARGE_Denomination_MUL_0_2",
+    }
+
+
+def test_role_retrieval_prefers_numeric_recharge_denomination_for_percentage_formula():
+    slots = {
+        "domain": "recharge",
+        "kpi_phrase": "recharge denomination",
+        "time_token": "2M",
+        "formula": {"type": "percentage_of_kpi", "percentage": 20, "factor": 0.2},
+        "filters": [{"phrase": "line type prepaid", "operator": "=", "value": "Prepaid"}],
+    }
+
+    page = compact_retrieval_page(build_retrieval_audit(slots, "omantel"), audit_id="percentage-recharge")
+
+    assert page["metric_candidates"][0]["feature_name"] == "RECHARGE_Denomination"
+    assert all(item["data_type"] == "numeric" for item in page["metric_candidates"])
 
 
 def test_select_seed_uses_airtel_notnull_data_usage_window():

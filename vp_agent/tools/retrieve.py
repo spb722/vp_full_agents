@@ -307,6 +307,9 @@ def _role_gate_failures(candidate: Candidate, slots: dict[str, Any], role: str) 
     failures: list[str] = []
     data_type = candidate.data_type.lower()
     aggregate = str(slots.get("aggregate") or "").upper()
+    formula = slots.get("formula")
+    if isinstance(formula, dict) and (formula.get("type") or formula.get("formula_type")):
+        aggregate = "FORMULA"
     phrase = str(slots.get("kpi_phrase") or slots.get("metric") or "").lower()
 
     if role == "metric":

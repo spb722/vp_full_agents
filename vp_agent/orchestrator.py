@@ -146,8 +146,12 @@ stage. If you use it, consume its result as advice; you remain responsible for
 the emitted rule.
 
 If confidence is low or the request is ambiguous, ask one batched plain-English
-clarification question. Do not hardcode golden-case phrases; use golden examples
-and skills to generalize."""
+clarification question. When clarification is required, do not emit a rule and
+finish with exactly one line in this form:
+`Clarification question: <one batched plain-English question>`
+Do not repeat the question or include internal columns, groups, tables, seeds,
+or templates. Do not hardcode golden-case phrases; use golden examples and
+skills to generalize."""
 
 
 AGENTS_DIR = PROJECT_DIR / ".claude" / "agents"

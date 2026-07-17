@@ -39,6 +39,13 @@ def _aggregate_intent(value: object) -> str:
     return text
 
 
+def _slot_aggregate_intent(slots: dict[str, Any]) -> str:
+    formula = slots.get("formula")
+    if isinstance(formula, dict) and (formula.get("type") or formula.get("formula_type")):
+        return "FORMULA"
+    return _aggregate_intent(slots.get("aggregate"))
+
+
 def normalize_time_token(raw: object) -> dict[str, Any]:
     token = str(raw or "").strip()
     lower = token.lower()
@@ -140,8 +147,11 @@ def _intent_score(
     seed_type = str(sig.get("seed_type") or "")
     formula = sig.get("formula") or {}
     guards = sig.get("guards") or {}
-    aggregate = _aggregate_intent(slots.get("aggregate"))
+    aggregate = _slot_aggregate_intent(slots)
     comparison = slots.get("comparison")
+    formula_slots = slots.get("formula") if isinstance(slots.get("formula"), dict) else {}
+    requested_formula_type = str(formula_slots.get("type") or formula_slots.get("formula_type") or "").lower()
+    seed_formula_type = str(formula.get("formula_type") or "").lower()
 
     if aggregate == "FORMULA":
         if formula.get("has_formula") or agg_type == "FORMULA":
@@ -149,6 +159,13 @@ def _intent_score(
             reasons.append("agent-extracted formula intent")
         else:
             score -= 8
+
+    if requested_formula_type:
+        if seed_formula_type == requested_formula_type:
+            score += 24
+            reasons.append(f"formula type match: {requested_formula_type}")
+        elif formula.get("has_formula") or agg_type == "FORMULA":
+            score -= 12
 
     if isinstance(comparison, dict) and comparison:
         if seed_type in {"derived_metric", "composite"} or formula.get("selection_intent"):
@@ -254,11 +271,26 @@ def _suggest_variables(
             if inferred:
                 variables[role] = inferred
 
+    formula_slots = slots.get("formula") if isinstance(slots.get("formula"), dict) else {}
+    if "factor" in required_variables:
+        factor = formula_slots.get("factor", slots.get("factor"))
+        if factor is None:
+            percentage = formula_slots.get("percentage", slots.get("percentage"))
+            if isinstance(percentage, (int, float)):
+                factor = percentage / 100
+        if isinstance(factor, (int, float)):
+            variables["factor"] = factor
+
     if "vp_name" in required_variables:
-        phrase = str(slots.get("kpi_phrase") or "VP")
-        time = str(slots.get("time_token") or "").upper()
-        name = re.sub(r"[^A-Za-z0-9]+", "_", f"{phrase}_{time}").strip("_").upper()
-        variables["vp_name"] = name or "VP_FORMULA"
+        formula_type = str(formula_slots.get("type") or formula_slots.get("formula_type") or "").lower()
+        if formula_type == "percentage_of_kpi" and variables.get("kpi_col") and "factor" in variables:
+            factor_token = str(variables["factor"]).replace(".", "_")
+            variables["vp_name"] = f"{variables['kpi_col']}_MUL_{factor_token}"
+        else:
+            phrase = str(slots.get("kpi_phrase") or "VP")
+            time = str(slots.get("time_token") or "").upper()
+            name = re.sub(r"[^A-Za-z0-9]+", "_", f"{phrase}_{time}").strip("_").upper()
+            variables["vp_name"] = name or "VP_FORMULA"
 
     return variables
 
@@ -273,7 +305,7 @@ def _seed_compatibility_failures(
     sig = seed.get("selection_signature") or {}
     agg_type = str(sig.get("agg_type") or "").upper()
     seed_type = str(sig.get("seed_type") or "").lower()
-    aggregate = _aggregate_intent(slots.get("aggregate"))
+    aggregate = _slot_aggregate_intent(slots)
     comparison_request = aggregate == "FORMULA" or bool(slots.get("comparison"))
     formula = sig.get("formula") or {}
     time = sig.get("time") or {}

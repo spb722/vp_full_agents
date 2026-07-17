@@ -73,11 +73,12 @@ Choose the seed/aggregation that matches the marketer's intent:
   `V{AVG_DAILY_COMMON_Data_Bundle_Revenue}=f{COMMON_Data_Bundle_Revenue/90}`.
 - "average weekly revenue last 4 weeks" -> formula dividing by 4, for example
   `V{AVG_WEEKLY_COMMON_OG_Call_Revenue}=f{COMMON_OG_Call_Revenue/4}`.
-- "20% of recharge amount" by itself is superseded by the reviewed
-  clarification behavior: ask what the calculated amount should be compared
-  with or used for. Use a factor formula only when the request states the
-  intended comparison or outcome, such as "20% of recharge amount greater than
-  the specified threshold."
+- "N% of recharge amount" and "flat N% of recharge amount" -> calculated
+  percentage-of-KPI formula. For a month window, prefer
+  `S160_percentage_of_kpi_formula_months_lower_only`; the percentage becomes a
+  factor (`20%` -> `0.2`) and the main KPI retains `${operator} ${value}`.
+  Do not apply this pattern to top/bottom population percentages, percentage
+  changes between periods, or ratios between two KPIs.
 - "maximum data usage" -> `MAX(...)`, not `SUM(...)`.
 - "purchased product 123 or 125" as a standalone audience filter -> product
   list plus `COUNT_ALL(SUBSCRIPTIONS_Product_Id) > 0`.
