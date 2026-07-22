@@ -7,7 +7,8 @@ This implementation follows the Claude Agent SDK architecture from the PRD:
 
 - one orchestrator session per request
 - project skills in `.claude/skills`
-- programmatic extractor, resolver, and verifier subagents
+- skill-driven extraction and resolution owned by the orchestrator
+- an optional independent verifier subagent, required for Variant-3 comparisons
 - Python tools exposed through an in-process MCP server for retrieval,
   rendering, validation, and auditable suggestions
 - hooks for audit, ordering checks, and render-time validation
@@ -17,8 +18,38 @@ interpretation, decomposition, retry strategy, and clarification. Python tools
 are not meant to become a full rules engine; they provide evidence, stable
 normalization, validation, and the only legal condition renderer.
 
-The public CLI and API always use the Agent SDK orchestrator with extractor,
-resolver, and verifier subagents.
+The public CLI and API always use the Agent SDK orchestrator. There is no
+user-selectable deterministic mode and no Python rule-building path in front of
+the agent.
+
+## Core Invariants
+
+- `client` is required input and is never inferred from the audience sentence.
+- The model owns semantic interpretation, decomposition, ambiguity handling,
+  column selection, routing, and retry strategy.
+- Retrieval and seed tools provide auditable evidence; they do not make the
+  final semantic decision.
+- A rule exists only when `render_condition` emits it. The model must never
+  write condition syntax through another path.
+- `validate_rule` checks every emitted rule. Render or grammar failures are
+  code defects, not prompts for the model to hand-edit syntax.
+- Clarification questions are batched and written in plain business language.
+
+## Runtime Flow
+
+1. The wrapper supplies the required client and audience description.
+2. The orchestrator loads the extraction and rendering skills, then loads
+   additional skills only when the request needs them.
+3. `normalize_slots` may provide a deterministic first-pass parse.
+4. `retrieve_columns` returns compact metric, filter, and time-compatible
+   candidates; the orchestrator resolves the intended columns and table.
+5. `select_seed` supplies template evidence when the rule needs aggregation,
+   formulas, joins, guards, or other non-trivial composition.
+6. `record_resolution` records the orchestrator's semantic choices for audit.
+7. `render_condition` is the only component allowed to emit the complete
+   `PARENT_CONDITION`.
+8. `validate_rule` checks the emitted rule. Variant-3 comparisons also require
+   the verifier subagent before the request completes.
 
 ## Project Layout
 
@@ -28,9 +59,8 @@ Claude project memory lives under `.claude/`:
 .claude/
   CLAUDE.md
   agents/
-    extractor.md
-    resolver.md
     verifier.md
+  settings.json
   skills/
     vp-extraction/
     vp-table-routing/
@@ -41,9 +71,11 @@ Claude project memory lives under `.claude/`:
     vp-golden-examples/
 ```
 
-Agent prompts live in `.claude/agents/`. The Python SDK configuration still
-creates `AgentDefinition` objects so tools, model, skills, and turn limits stay
-explicit and testable.
+The verifier prompt lives in `.claude/agents/`. Extraction and resolution are
+orchestrator responsibilities guided by project skills rather than separate
+pipeline subagents. The Python SDK configuration creates the verifier's
+`AgentDefinition` so its tools, model, skills, and turn limit remain explicit
+and testable.
 
 ## Agentic Memory
 
@@ -242,18 +274,23 @@ formula with phrase-based branching.
 
 ## Condition Planning
 
-`build_condition_plan` connects retrieval, routing, and seed selection into the
-exact input expected by `render_condition`. It chooses a main KPI column,
-resolves filter columns, selects the route/seed, and returns `render_input`
-without emitting condition syntax. This keeps `render_condition` as the only SDK
-tool that emits `PARENT_CONDITION`.
+There is no deterministic planning stage in the live agent path. The
+orchestrator interprets retrieval and seed evidence, chooses the main KPI,
+filters, table, aggregate, date bounds, and predicate ordering, records that
+resolution, and composes the complete template passed to `render_condition`.
+
+Legacy deterministic planning helpers remain in `vp_agent.tools.plan` for
+tests and regression analysis, and the in-process MCP server still defines
+compatibility tools such as `build_condition_plan` and `route_table`. They are
+intentionally absent from the orchestrator's `allowed_tools`, so they cannot
+replace live semantic reasoning.
 
 ## Slot Normalization
 
 `normalize_slots` provides a deterministic first pass for common marketer
 sentences. It handles common operators, numeric values, rolling time windows,
 recharge/data domains, and common filters such as Omani nationality and
-smartphones. The Claude extractor can use this as a normalization aid; it is not
+smartphones. The orchestrator can use this as a normalization aid; it is not
 exposed as a user-selectable application mode.
 
 ## Golden Dataset
@@ -265,8 +302,8 @@ M*, W*, rolling-day, MTD/LMTD, FW*, and similar pre-aggregated 360 columns. Do
 not add an event/date condition like `CurrentMonth-*`, `CurrentTime-*`, or
 `Event_Date`, because the snapshot column already represents that period.
 
-The resolver and verifier agents can load `.claude/skills/vp-golden-examples`
-as reviewed example memory. Add new semantic cases there before adding Python
+The orchestrator and verifier can load `.claude/skills/vp-golden-examples` as
+reviewed example memory. Add new semantic cases there before adding Python
 branches, unless the change is a stable invariant or mechanical parser rule.
 
 Run a snapshot-focused audit with:
