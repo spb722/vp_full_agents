@@ -53,6 +53,16 @@ def _find_time_token(text: str) -> str:
             return f"{int(match.group(1))}{unit}"
     if re.search(r"\byesterday\b", text, re.I):
         return "1D"
+    if re.search(r"\b(?:last|past|previous|trailing)\s+week\b", text, re.I):
+        # "last week from today" is a rolling seven-day window; a bare "last
+        # week" is the completed calendar week. The agent re-reads the whole
+        # sentence and may override this first pass.
+        rolling = re.search(
+            r"\b(?:from|as of|up to|until|till)\s+(?:today|now|date)\b|\b(?:rolling|trailing)\b",
+            text,
+            re.I,
+        )
+        return "7D" if rolling else "W1"
     if re.search(r"\b(month to date|mtd|this month|current month)\b", text, re.I):
         return "MTD"
     if re.search(r"\b(last month|previous month)\b", text, re.I):
@@ -62,8 +72,20 @@ def _find_time_token(text: str) -> str:
     return "none"
 
 
+MEASURE_RE = re.compile(r"\b(revenue|spend|spent|arpu|usage|volume|consumption)\b", re.I)
+
+
 def _detect_domain_and_kpi(text: str) -> tuple[str, str]:
+    """Best-effort first-pass guess. Advisory only — the agent owns these.
+
+    A product noun must not outrank a measure word. "total data bundle revenue"
+    is a revenue KPI that happens to mention a bundle, not a subscription
+    request, and mis-labelling the domain silently reweights retrieval through
+    DOMAIN_GROUP_PREFERENCES.
+    """
     lowered = text.lower()
+    has_measure = bool(MEASURE_RE.search(lowered))
+
     if re.search(r"\b(recharged|recharge|top[- ]?up|topup|voucher)\b", lowered):
         if re.search(r"\b(count|number|times|frequency)\b", lowered):
             return "recharge", "recharge count"
@@ -75,9 +97,14 @@ def _detect_domain_and_kpi(text: str) -> tuple[str, str]:
     if re.search(r"\b(sms|message)\b", lowered):
         return "usage", "sms usage"
     if re.search(r"\b(pack|bundle|product|subscription|subscribed|purchased)\b", lowered):
+        if has_measure:
+            # A measured amount over a product family, not a subscription event.
+            return "usage", ""
         return "subscription", "subscription"
     if re.search(r"\b(segment|audience)\b", lowered):
         return "audience_segment", "audience segment"
+    if has_measure:
+        return "usage", ""
     return "unknown", ""
 
 
@@ -132,7 +159,38 @@ def normalize_slots(request: str, client: str | None = None) -> dict[str, Any]:
         "value": value,
         "filters": filters,
         "negations": [],
-        "needs_clarification": bool(missing),
+        # Whether a request needs clarification is a business judgment the agent
+        # owns. A regex pass that failed to name the KPI has not discovered an
+        # ambiguity, so it must not raise one; `missing` stays as information.
+        "needs_clarification": False,
         "missing": missing,
         "warnings": warnings,
     }
+
+
+# Fields this deterministic pass is trusted to produce. Everything else is a
+# semantic judgment the agent re-derives from the sentence anyway, so it is
+# withheld from the model to avoid anchoring on a confident-but-wrong guess.
+MODEL_FACING_SLOTS = ("raw_request", "operator", "value", "time_token", "filters")
+AGENT_OWNED_SLOTS = (
+    "domain",
+    "kpi_phrase",
+    "aggregate",
+    "group_by",
+    "negations",
+    "comparison",
+    "formula",
+)
+
+
+def model_facing_slots(parsed: dict[str, Any]) -> dict[str, Any]:
+    """Trim the first-pass parse to the fields it actually parses reliably."""
+    view = {key: parsed.get(key) for key in MODEL_FACING_SLOTS}
+    view["client"] = parsed.get("client")
+    view["parsed_by"] = "deterministic first pass (regex); correct it wherever the sentence says otherwise"
+    view["not_parsed"] = list(AGENT_OWNED_SLOTS)
+    view["note"] = (
+        "This pass parses only mechanical fields. Derive domain, kpi_phrase, aggregate, "
+        "grouping, negations, and any period comparison yourself from the sentence."
+    )
+    return view

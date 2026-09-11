@@ -75,10 +75,15 @@ def summarize_tool_output(tool_name: str, tool_response: Any) -> str | None:
 
 
 def _extractor_summary(data: dict[str, Any]) -> str | None:
+    # The model-facing first pass no longer reports domain/kpi_phrase, so keep
+    # those for callers that still have them and fall back to the mechanical
+    # fields it does parse.
     fields = {
         "domain": data.get("domain"),
         "kpi": data.get("kpi_phrase"),
         "time": data.get("time_token"),
+        "operator": data.get("operator") if data.get("operator") != "unknown" else None,
+        "filters": len(data["filters"]) if isinstance(data.get("filters"), list) and data["filters"] else None,
     }
     text = _kv_summary(fields)
     return f"Extractor decision: {text}" if text else None

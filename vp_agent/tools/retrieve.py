@@ -286,25 +286,57 @@ def _snapshot_matches(candidate: Candidate, requested_time: str) -> bool:
     return any(re.search(rf"(^|_){re.escape(alias)}(_|$)", feature) for alias in aliases)
 
 
+def _column_period(candidate: Candidate) -> str:
+    metadata_time = _canonical_time_token(candidate.time_window_value)
+    if metadata_time:
+        return metadata_time
+    match = SNAPSHOT_TOKEN_RE.search(candidate.feature_name)
+    return _canonical_time_token(match.group(0).strip("_")) if match else "unnamed period"
+
+
 def _time_support(candidate: Candidate, slots: dict[str, Any]) -> tuple[str, list[str]]:
+    """Return a display label plus any time-related adaptation notes.
+
+    These are notes, not disqualifications. A period mismatch often means the
+    extracted time token is wrong rather than the column being wrong, and the
+    agent can only notice that if it still sees the column.
+    """
     requested_time = _time_token(slots)
     snapshot = _is_snapshot(candidate)
     if requested_time == "NONE":
         if snapshot:
-            return "period snapshot not requested", ["period_snapshot_without_requested_period"]
+            return "period snapshot not requested", [
+                f"period_snapshot_without_requested_period: column encodes {_column_period(candidate)} "
+                "but the request stated no period; use it only if the period was missed during extraction"
+            ]
         return "no time window required", []
     if snapshot:
         if _snapshot_matches(candidate, requested_time):
             return f"exact {requested_time} snapshot", []
-        return "snapshot period mismatch", ["snapshot_period_mismatch"]
+        return "snapshot period mismatch", [
+            f"snapshot_period_mismatch: column covers {_column_period(candidate)}; "
+            f"the request asked for {requested_time}"
+        ]
     date_column = date_column_for_group(candidate.group_name, slots)
     if date_column:
         return "custom rolling window", []
-    return "no configured event date", ["missing_group_date_configuration"]
+    return "no configured event date", [
+        f"missing_group_date_configuration: group {candidate.group_name} has no configured event date, "
+        "so a window cannot be bounded on it"
+    ]
 
 
-def _role_gate_failures(candidate: Candidate, slots: dict[str, Any], role: str) -> list[str]:
-    failures: list[str] = []
+def _role_gates(candidate: Candidate, slots: dict[str, Any], role: str) -> tuple[list[str], list[str]]:
+    """Split structural impossibility from things the agent can weigh itself.
+
+    A block means the column can never fill this role — you cannot SUM a string.
+    Everything else is an adaptation note: a period that does not line up, a
+    snapshot that encodes the wrong aggregate. Those depend on slots that
+    earlier steps may have got wrong, so deleting the candidate also deletes the
+    agent's chance to notice the upstream mistake.
+    """
+    blocks: list[str] = []
+    notes: list[str] = []
     data_type = candidate.data_type.lower()
     aggregate = str(slots.get("aggregate") or "").upper()
     formula = slots.get("formula")
@@ -314,26 +346,28 @@ def _role_gate_failures(candidate: Candidate, slots: dict[str, Any], role: str) 
 
     if role == "metric":
         if data_type == "date" and not any(term in phrase for term in ("date", "day", "time")):
-            failures.append("metric_requires_non_date_column")
+            blocks.append("metric_requires_non_date_column")
         if aggregate in {"SUM", "AVG", "MAX", "FORMULA"} and data_type in {"date", "string", "categorical"}:
-            failures.append("aggregate_requires_numeric_metric")
+            blocks.append("aggregate_requires_numeric_metric")
         feature = candidate.feature_name.upper()
         if _is_snapshot(candidate):
             if aggregate == "SUM" and re.search(r"(^|_)(?:MAX|AVG)(_|$)", feature):
-                failures.append("snapshot_aggregate_mismatch")
+                notes.append("snapshot_aggregate_mismatch: this snapshot is pre-aggregated as MAX/AVG, not a sum")
             elif aggregate == "AVG" and "AVG" not in feature:
-                # Raw event candidates remain eligible for an average formula;
-                # only a precomputed snapshot must encode AVG explicitly.
-                failures.append("snapshot_average_not_encoded")
-        _, time_failures = _time_support(candidate, slots)
-        failures.extend(time_failures)
-    elif role.startswith("filter:"):
+                # Raw event candidates remain fine for an average formula; only a
+                # precomputed snapshot has to encode AVG explicitly.
+                notes.append("snapshot_average_not_encoded: this snapshot does not encode an average")
+        _, time_notes = _time_support(candidate, slots)
+        notes.extend(time_notes)
+    elif role.startswith("filter"):
         operator = str(slots.get("operator") or "").upper()
         value = slots.get("value")
         scalar = str(value or "").replace(".", "", 1)
         if operator in {">", ">=", "<", "<="} and scalar.isdigit() and data_type in {"date", "string", "categorical"}:
-            failures.append("numeric_filter_requires_numeric_column")
-    return list(dict.fromkeys(failures))
+            notes.append(
+                f"numeric_filter_requires_numeric_column: the predicate compares numerically but this column is {data_type}"
+            )
+    return list(dict.fromkeys(blocks)), list(dict.fromkeys(notes))
 
 
 def _group_preference(candidate: Candidate, slots: dict[str, Any], metric_group: str | None = None) -> float:
@@ -422,6 +456,60 @@ def _qualifier_adjustment(candidate: Candidate, slots: dict[str, Any]) -> float:
     return adjustment
 
 
+GENERIC_PHRASE_TERMS = frozenset(
+    {
+        "customer", "customers", "subscriber", "subscribers", "user", "users", "people",
+        "base", "who", "whose", "with", "and", "the", "of", "in", "for", "their", "has",
+        "have", "is", "are", "was", "were", "that", "this", "any", "all", "from", "to",
+        "a", "an", "on", "by", "at", "select", "check", "list", "total",
+    }
+)
+
+
+def _explained_terms(candidate: Candidate) -> set[str]:
+    from vp_agent.tools.retrieval_index import column_value_vocabulary
+
+    observed = column_value_vocabulary().get(candidate.feature_name, ())
+    text = " ".join(
+        (
+            candidate.feature_name.replace("_", " "),
+            candidate.description,
+            candidate.group_name.replace("_", " "),
+            " ".join(observed),
+        )
+    )
+    return set(expand_tokens(tokens(text)))
+
+
+def unexplained_phrase_terms(phrase: str, candidates: list[Candidate]) -> list[str]:
+    """Meaningful words in the phrase that the BEST candidate does not cover.
+
+    Deliberately measured against the top candidate alone, because the question
+    is "does one column carry this whole phrase?". For a filter, a leftover
+    means the phrase describes two attributes and needs splitting. For the
+    metric, it means the chosen column is broader than the request.
+    """
+    if not candidates:
+        return []
+    phrase_terms = [
+        term
+        for term in dict.fromkeys(tokens(phrase))
+        if term not in GENERIC_PHRASE_TERMS and not term.isdigit() and len(term) > 1
+    ]
+    if not phrase_terms:
+        return []
+
+    explained = _explained_terms(candidates[0])
+    leftover: list[str] = []
+    for term in phrase_terms:
+        variants = set(expand_tokens([term]))
+        variants.add(term.rstrip("s"))
+        variants.add(f"{term}s")
+        if not variants & explained:
+            leftover.append(term)
+    return leftover
+
+
 def _candidate_evidence(candidate: Candidate, slots: dict[str, Any], time_support: str, group_bonus: float) -> str:
     evidence: list[str] = []
     if candidate.bm25_norm >= 0.7 and candidate.embedding_norm >= 0.6:
@@ -446,16 +534,22 @@ def compact_candidate(
     *,
     group_bonus: float = 0.0,
     qualifier_adjustment: float = 0.0,
+    adaptations: list[str] | None = None,
+    full_description: bool = False,
 ) -> dict[str, Any]:
     time_support, _ = _time_support(candidate, slots)
+    adaptations = adaptations or []
     return {
         "candidate_id": candidate.id,
         "feature_name": candidate.feature_name,
         "group_name": candidate.group_name,
         "data_type": candidate.data_type,
-        "description": _short_text(candidate.description),
+        # Scope often lives in the tail of a description, so keep the leading
+        # candidates whole and truncate only the rest.
+        "description": candidate.description if full_description else _short_text(candidate.description),
         "time_window_support": time_support,
         "score": round(candidate.score + group_bonus + qualifier_adjustment, 3),
+        "adaptations": adaptations,
         "evidence": _candidate_evidence(candidate, slots, time_support, group_bonus),
     }
 
@@ -472,23 +566,29 @@ def _rank_role(
     candidates = retrieve_columns(slots, client=client, exclude=exclude, top_k=10000)
     ranked: list[dict[str, Any]] = []
     for raw_rank, candidate in enumerate(candidates, start=1):
-        failures = _role_gate_failures(candidate, slots, role)
+        blocks, notes = _role_gates(candidate, slots, role)
         group_bonus = _group_preference(candidate, slots, metric_group)
         qualifier_adjustment = _qualifier_adjustment(candidate, slots)
         ranked.append(
             {
                 "candidate": candidate,
                 "raw_rank": raw_rank,
-                "eligible": not failures,
-                "gate_failures": failures,
+                "eligible": not blocks,
+                "gate_failures": blocks,
+                "adaptations": notes,
+                "clean": not notes,
                 "group_bonus": group_bonus,
                 "qualifier_adjustment": qualifier_adjustment,
                 "reranked_score": candidate.score + group_bonus + qualifier_adjustment,
             }
         )
+    # Adaptation notes are a sort tier, not a score penalty: a clean candidate
+    # still outranks every noted one, so existing choices are unchanged, but the
+    # noted candidates now fill the page instead of vanishing from it.
     ranked.sort(
         key=lambda item: (
             item["eligible"],
+            item["clean"],
             item["reranked_score"],
             -item["raw_rank"],
         ),
@@ -506,11 +606,14 @@ def _metric_role_slots(slots: dict[str, Any]) -> dict[str, Any]:
 def _filter_role_slots(slots: dict[str, Any], filter_item: dict[str, Any]) -> dict[str, Any]:
     phrase = str(filter_item.get("phrase") or filter_item.get("name") or filter_item.get("field") or "")
     value = filter_item.get("value")
+    # Most filters are subscriber attributes with no period of their own, but a
+    # filter can carry one ("purchased a product in the last 45 days"). Forcing
+    # profile/none on every filter made that period unmatchable.
     return {
         "raw_request": slots.get("raw_request", ""),
-        "domain": "profile",
+        "domain": str(filter_item.get("domain") or "profile"),
         "kpi_phrase": " ".join(part for part in (phrase, str(value or "")) if part),
-        "time_token": "none",
+        "time_token": str(filter_item.get("time_token") or filter_item.get("period") or "none"),
         "operator": filter_item.get("operator") or "=",
         "value": value,
         "filters": [filter_item],
@@ -576,6 +679,7 @@ def compact_retrieval_page(
     selected_roles = role_ids or list(audit["roles"])
 
     metric_candidates: list[dict[str, Any]] = []
+    metric_unexplained: list[str] = []
     filter_candidates: list[dict[str, Any]] = []
     expandable_roles: list[str] = []
     for role_id in selected_roles:
@@ -590,33 +694,41 @@ def compact_retrieval_page(
                 role["slots"],
                 group_bonus=item["group_bonus"],
                 qualifier_adjustment=item["qualifier_adjustment"],
+                adaptations=item["adaptations"],
+                full_description=index < 2,
             )
-            for item in page_items
+            for index, item in enumerate(page_items)
         ]
         if len(eligible) > stop and page < 3:
             expandable_roles.append(role_id)
+        leftover = unexplained_phrase_terms(
+            role["phrase"], [item["candidate"] for item in page_items]
+        )
         if role_id == "metric":
             metric_candidates = compact
+            metric_unexplained = leftover
         else:
             filter_candidates.append(
                 {
                     "role_id": role_id,
                     "phrase": role["phrase"],
                     "candidates": compact,
+                    "unexplained_terms": leftover,
                 }
             )
 
     requested_time = audit["requested_time"]
-    primary_time_support = (
-        metric_candidates[0]["time_window_support"]
-        if metric_candidates
-        else "unresolved"
+    # Scan the whole page: an exact snapshot at rank 3 still means the rule must
+    # not add its own date bound, and reading only the top candidate reported
+    # requires_event_date on requests a snapshot already covered.
+    exact_snapshot_found = any(
+        str(item["time_window_support"]).startswith("exact ") for item in metric_candidates
     )
-    exact_snapshot_found = primary_time_support.startswith("exact ")
     return {
         "audit_id": audit_id,
         "page": page,
         "metric_candidates": metric_candidates,
+        "metric_unexplained_terms": metric_unexplained,
         "filter_candidates": filter_candidates,
         "time_assessment": {
             "requested_time": requested_time,
@@ -640,6 +752,7 @@ def serialize_retrieval_audit(audit: dict[str, Any]) -> dict[str, Any]:
                     "reranked_rank": item["reranked_rank"],
                     "eligible": item["eligible"],
                     "gate_failures": item["gate_failures"],
+                    "adaptations": item["adaptations"],
                     "group_bonus": item["group_bonus"],
                     "qualifier_adjustment": item["qualifier_adjustment"],
                     "reranked_score": item["reranked_score"],

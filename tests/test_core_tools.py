@@ -59,6 +59,11 @@ def test_orchestrator_uses_agentic_emission_and_disallows_bash():
     assert '"high value customer"' in ORCHESTRATOR_APPEND
     assert "Clarification question: <one batched plain-English question>" in ORCHESTRATOR_APPEND
     assert "Do not search the filesystem" in ORCHESTRATOR_APPEND
+    assert "never a reason to discard a well-matched" in ORCHESTRATOR_APPEND
+    assert "supply.advisory" in ORCHESTRATOR_APPEND
+    assert "Warnings are advisory, not blocking" in ORCHESTRATOR_APPEND
+    assert "Never finish having" in ORCHESTRATOR_APPEND
+    assert "rolling and renders CurrentTime-NDAYS" in ORCHESTRATOR_APPEND
 
     options = build_options()
 
@@ -723,14 +728,94 @@ def test_cli_accepts_debug_sdk_and_trace_file_flags():
     assert "--deterministic" not in result.stdout
 
 
-def test_verifier_uses_golden_examples_skill():
+def test_verifier_reads_evidence_not_the_orchestrators_instructions():
+    """The verifier only adds value when it can reach a different conclusion.
+
+    Loading the orchestrator's own procedural skills made it restate that
+    reasoning, so it would have passed the rule that silently dropped a stated
+    threshold. It keeps `vp-metrics-comparison` because the reviewed Variant-3
+    convention is a business fact it cannot infer from evidence.
+    """
     from vp_agent.orchestrator import build_agents
 
     agents = build_agents("test-model")
+    verifier = agents["verifier"]
 
     assert set(agents) == {"verifier"}
-    assert "vp-golden-examples" in agents["verifier"].skills
-    assert "vp-metrics-comparison" in agents["verifier"].skills
+    assert verifier.skills == ["vp-metrics-comparison"]
+    for echoed in ("vp-rendering-rules", "vp-golden-examples", "vp-variant-selection", "vp-disambiguation"):
+        assert echoed not in verifier.skills
+    # It needs production VPs to have an independent view to compare against.
+    assert "mcp__vp__retrieve_existing_vps" in verifier.tools
+
+
+def test_orchestrator_triggers_the_verifier_on_objective_conditions():
+    from vp_agent.orchestrator import ORCHESTRATOR_APPEND
+
+    assert "confidence is not high" not in ORCHESTRATOR_APPEND
+    assert "confidence is highest" in ORCHESTRATOR_APPEND
+    for trigger in ("supply.advisory", "unexplained_terms", "Variant-3 period comparison"):
+        assert trigger in ORCHESTRATOR_APPEND
+
+
+def test_hook_captures_the_verifier_verdict():
+    from vp_agent.hooks import make_hooks
+    from vp_agent.schemas import ToolState
+
+    state = ToolState()
+    hook = make_hooks(state)["PostToolUse"][0].hooks[0]
+
+    asyncio.run(
+        hook(
+            {
+                "tool_name": "Agent",
+                "tool_input": {"subagent_type": "verifier"},
+                "tool_response": {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": (
+                                "Restated request: prepaid smartphone customers...\n"
+                                "VERDICT: retry — the stated count threshold of 4 is absent from the rule"
+                            ),
+                        }
+                    ]
+                },
+            },
+            "tool-verifier",
+            {"signal": None},
+        )
+    )
+
+    assert state.verifier_verdict["decision"] == "retry"
+    assert "threshold of 4" in state.verifier_verdict["detail"]
+    assert state.verifier_verdict["agent"] == "verifier"
+
+
+def test_verifier_verdict_reaches_the_api_response(monkeypatch):
+    import vp_agent.api as api_module
+    from vp_agent.schemas import ToolState
+
+    state = ToolState(
+        render_seen=True,
+        rendered_parent_condition="CUST_360_RECHARGE_AMOUNT_30D ${operator} ${value}",
+        verifier_verdict={"decision": "pass", "detail": "rule matches the request", "agent": "verifier"},
+    )
+
+    async def fake_run_request(*args, **kwargs):
+        if False:
+            yield None
+
+    monkeypatch.setattr(api_module, "ToolState", lambda **kwargs: state)
+    monkeypatch.setattr(api_module, "run_request", fake_run_request)
+
+    response = asyncio.run(
+        api_module._build_agentic(
+            api_module.VPBuildRequest(client="omantel", sentence="recharge amount in the last 30 days")
+        )
+    )
+
+    assert response.verifier_verdict["decision"] == "pass"
 
 
 def test_verifier_prompt_lives_under_claude_agents():
@@ -848,6 +933,7 @@ def test_role_aware_batch_returns_compact_candidates_per_role():
         "description",
         "time_window_support",
         "score",
+        "adaptations",
         "evidence",
     }
     assert "bm25_score" not in result["metric_candidates"][0]
@@ -891,6 +977,167 @@ def test_week_token_aliases_keep_reviewed_four_week_average_snapshot_in_top_five
     assert "CUST_360_VOICE_REVENUE_IDD_FINANCE_REV_4W_AVG" in names
     snapshot = next(item for item in candidates if item["feature_name"] == "CUST_360_VOICE_REVENUE_IDD_FINANCE_REV_4W_AVG")
     assert snapshot["time_window_support"] == "exact W4 snapshot"
+
+
+def _candidate(feature_name: str, description: str, group_name: str = "Profile_Cdr_group"):
+    from vp_agent.schemas import Candidate
+
+    return Candidate(
+        id="test",
+        feature_name=feature_name,
+        group_name=group_name,
+        description=description,
+        data_type="categorical",
+        time_window_value="",
+        score=1.0,
+        reason="",
+    )
+
+
+def test_value_vocabulary_links_marketer_values_to_their_columns():
+    from vp_agent.tools.retrieval_index import column_value_vocabulary
+
+    vocabulary = column_value_vocabulary()
+
+    # kpi_meta records value_references "NONE" for nationality, so the only
+    # path from the word "Indian" to this column is mined usage.
+    assert "indian" in vocabulary.get("Profile_Cdr_Nationality", ())
+    assert "iphone" in vocabulary.get("Profile_Cdr_Handset_Type", ())
+
+
+def test_retrieval_finds_nationality_from_a_bare_value():
+    candidates = retrieve_columns({"kpi_phrase": "Indian"}, client="omantel", top_k=5)
+
+    assert "Profile_Cdr_Nationality" in {candidate.feature_name for candidate in candidates}
+
+
+def test_unexplained_terms_flag_a_compound_filter_phrase():
+    from vp_agent.tools.retrieve import unexplained_phrase_terms
+
+    handset = _candidate(
+        "Profile_Cdr_Handset_Type",
+        "The category of the device being used (e.g., Smartphone, Feature Phone).",
+    )
+
+    assert unexplained_phrase_terms("Indian iPhone customers", [handset]) == ["indian"]
+
+
+def test_unexplained_terms_flag_a_metric_column_that_is_too_broad():
+    from vp_agent.tools.retrieve import unexplained_phrase_terms
+
+    broad = _candidate("COMMON_OG_Sms_Revenue", "Revenue from outgoing SMS.", "Common_Seg_Fct")
+
+    assert unexplained_phrase_terms("outgoing international sms revenue", [broad]) == ["international"]
+
+
+def test_unexplained_terms_tolerate_plurals_and_synonyms():
+    from vp_agent.tools.retrieve import unexplained_phrase_terms
+
+    handset = _candidate(
+        "Profile_Cdr_Handset_Type",
+        "The category of the device being used (e.g., Smartphone, Feature Phone).",
+    )
+
+    assert unexplained_phrase_terms("smartphones", [handset]) == []
+    assert unexplained_phrase_terms("smartphone customers", [handset]) == []
+
+
+def test_retrieval_page_reports_unexplained_terms_per_role():
+    slots = {
+        "raw_request": "Indian iPhone customers whose data revenue in the last 2 weeks is high",
+        "domain": "usage",
+        "kpi_phrase": "data revenue",
+        "aggregate": "SUM",
+        "time_token": "2W",
+        "filters": [{"phrase": "Indian iPhone customers", "operator": "=", "value": "Indian"}],
+    }
+
+    page = compact_retrieval_page(build_retrieval_audit(slots, "omantel"), audit_id="compound")
+
+    assert "metric_unexplained_terms" in page
+    assert page["filter_candidates"]
+    assert "unexplained_terms" in page["filter_candidates"][0]
+
+
+def test_period_mismatched_snapshots_stay_visible_with_a_reason():
+    # A wrong period often means the extracted time token is wrong, not that the
+    # column is wrong. The candidate must survive so the agent can notice.
+    slots = {
+        "raw_request": "recharge amount last month",
+        "domain": "recharge",
+        "kpi_phrase": "recharge amount",
+        "time_token": "M1",
+        "filters": [],
+    }
+    ranking = build_retrieval_audit(slots, "omantel")["roles"]["metric"]["ranking"]
+    mismatched = [item for item in ranking if any("snapshot_period_mismatch" in note for note in item["adaptations"])]
+
+    assert mismatched
+    assert all(item["eligible"] for item in mismatched)
+    assert all(not item["gate_failures"] for item in mismatched)
+
+
+def test_clean_candidates_still_outrank_adapted_ones():
+    slots = {
+        "raw_request": "recharge amount last month",
+        "domain": "recharge",
+        "kpi_phrase": "recharge amount",
+        "time_token": "M1",
+        "filters": [],
+    }
+    ranking = [item for item in build_retrieval_audit(slots, "omantel")["roles"]["metric"]["ranking"] if item["eligible"]]
+    first_adapted = next((index for index, item in enumerate(ranking) if item["adaptations"]), len(ranking))
+
+    assert all(not item["adaptations"] for item in ranking[:first_adapted])
+    assert all(item["adaptations"] for item in ranking[first_adapted:])
+
+
+def test_non_numeric_metric_for_a_sum_is_still_blocked():
+    slots = {
+        "raw_request": "total data revenue in the last 2 weeks",
+        "domain": "usage",
+        "kpi_phrase": "data revenue",
+        "aggregate": "SUM",
+        "time_token": "2W",
+        "filters": [],
+    }
+    page = compact_retrieval_page(build_retrieval_audit(slots, "omantel"), audit_id="sum-block")
+
+    assert page["metric_candidates"]
+    assert all(item["data_type"] not in {"string", "categorical", "date"} for item in page["metric_candidates"])
+
+
+def test_exact_snapshot_is_detected_below_the_top_candidate():
+    from vp_agent.tools.retrieve import compact_retrieval_page as page_fn
+
+    audit = build_retrieval_audit(
+        {
+            "raw_request": "recharge amount in the last 30 days",
+            "domain": "recharge",
+            "kpi_phrase": "recharge amount",
+            "time_token": "30D",
+            "filters": [],
+        },
+        "omantel",
+    )
+    page = page_fn(audit, audit_id="snapshot-scan")
+    exact = [item for item in page["metric_candidates"] if item["time_window_support"].startswith("exact ")]
+
+    assert exact
+    assert page["time_assessment"]["exact_snapshot_found"] is True
+    assert page["time_assessment"]["requires_event_date"] is False
+
+
+def test_filter_role_inherits_its_own_period():
+    from vp_agent.tools.retrieve import _filter_role_slots
+
+    inherited = _filter_role_slots({}, {"phrase": "purchased a product", "time_token": "45D", "domain": "subscription"})
+    default = _filter_role_slots({}, {"phrase": "smartphones", "value": "smartphone"})
+
+    assert inherited["time_token"] == "45D"
+    assert inherited["domain"] == "subscription"
+    assert default["time_token"] == "none"
+    assert default["domain"] == "profile"
 
 
 def test_shelf_lookup_prefers_360_for_recharge_amount_30d():
@@ -1006,6 +1253,319 @@ def test_role_retrieval_prefers_numeric_recharge_denomination_for_percentage_for
 
     assert page["metric_candidates"][0]["feature_name"] == "RECHARGE_Denomination"
     assert all(item["data_type"] == "numeric" for item in page["metric_candidates"])
+
+
+COUNT_THRESHOLD_SLOTS = {
+    "raw_request": "To select customers who purchased any product at most 4 times in the last week",
+    "domain": "subscription",
+    "kpi_phrase": "product purchase count",
+    "time_token": "W1",
+    "operator": "<=",
+    "value": "4",
+    "aggregate": "COUNT",
+    "filters": [],
+}
+COUNT_THRESHOLD_COLUMNS = [
+    {"feature_name": "SUBSCRIPTIONS_Product_Id", "group_name": "Subscriptions", "data_type": "string"}
+]
+COUNT_THRESHOLD_RULE = (
+    "SUBSCRIPTIONS_DT >= CurrentWeek-1WEEKS AND SUBSCRIPTIONS_DT < CurrentWeek "
+    "AND COUNT_ALL(SUBSCRIPTIONS_Product_Id) ${operator} ${value}"
+)
+
+
+def test_count_threshold_seed_infers_key_col_and_threshold():
+    audit = build_seed_audit(
+        COUNT_THRESHOLD_SLOTS,
+        client="omantel",
+        columns=COUNT_THRESHOLD_COLUMNS,
+        table="Subscriptions",
+    )
+    seed = next(item for item in audit["candidates"] if item["seed_id"] == "S30_count_threshold_30d")
+
+    assert seed["suggested_variables"]["key_col"] == "SUBSCRIPTIONS_Product_Id"
+    # The seed declares a fixed `COUNT_ALL(...) <= {threshold}` comparison and the
+    # request states `<= 4`, so the threshold resolves deterministically.
+    assert seed["suggested_variables"]["threshold"] == 4
+
+
+def test_count_threshold_seed_is_eligible_despite_window_unit_difference():
+    audit = build_seed_audit(
+        COUNT_THRESHOLD_SLOTS,
+        client="omantel",
+        columns=COUNT_THRESHOLD_COLUMNS,
+        table="Subscriptions",
+    )
+    seed = next(item for item in audit["candidates"] if item["seed_id"] == "S30_count_threshold_30d")
+
+    assert seed["eligible"], seed["gate_failures"]
+    assert not any("time_unit_mismatch" in failure for failure in seed["gate_failures"])
+    assert not any("missing_required_variables" in failure for failure in seed["gate_failures"])
+    # The seed's 30-day window differs from the requested week; that is a
+    # re-parameterisation the agent performs, not a disqualification.
+    assert any("time_unit_adaptation" in note for note in seed["adaptations"])
+    assert seed["matched_phrases"]
+
+
+def test_every_seed_variable_is_one_the_system_knows_about():
+    """Guards the bug class that hid `key_col` and `threshold` for so long.
+
+    A seed whose template needs a variable nobody can fill or defer is
+    unusable, and nothing announces it. This fails the moment a new seed
+    introduces an unknown role name.
+    """
+    from vp_agent.data import load_seed_catalog
+    from vp_agent.tools.seed import KNOWN_TEMPLATE_ROLES, _required_variables
+
+    unknown: dict[str, list[str]] = {}
+    for seed in load_seed_catalog().get("seeds", []):
+        for variable in _required_variables(seed):
+            if variable not in KNOWN_TEMPLATE_ROLES:
+                unknown.setdefault(variable, []).append(str(seed.get("seed_id")))
+
+    assert not unknown, f"seed variables with no resolver role or declared deferral: {unknown}"
+
+
+def test_identifier_roles_do_not_resolve_to_the_metric_column():
+    from vp_agent.tools.seed import _infer_column
+
+    columns = [
+        {"feature_name": "SUBSCRIPTIONS_Revenue", "group_name": "Subscriptions", "data_type": "numeric"},
+        {"feature_name": "SUBSCRIPTIONS_Product_Id", "group_name": "Subscriptions", "data_type": "string"},
+    ]
+
+    assert _infer_column(columns, "kpi_col", "Subscriptions") == "SUBSCRIPTIONS_Revenue"
+    for role in ("grp_col", "key_col", "id_col"):
+        assert _infer_column(columns, role, "Subscriptions") == "SUBSCRIPTIONS_Product_Id"
+
+
+def test_360_single_seed_is_reported_as_by_design_not_a_shortage():
+    slots = {
+        "domain": "recharge",
+        "kpi_phrase": "recharge amount",
+        "time_token": "30D",
+        "operator": ">",
+        "value": "5",
+    }
+    columns = [
+        {"feature_name": "CUST_360_RECHARGE_AMOUNT_30D", "group_name": "360_PROFILE", "data_type": "numeric"}
+    ]
+
+    supply = select_seed(slots, client="omantel", columns=columns, table="360_PROFILE")["supply"]
+
+    # Exactly one seed is permitted on the snapshot path, so the "weak evidence"
+    # advisory must not fire and mislead the agent into ignoring it.
+    assert supply["eligible"] == 1
+    assert "advisory" not in supply
+    assert "360 snapshot path" in supply["note"]
+
+
+def test_seed_selection_reports_candidate_supply():
+    result = select_seed(
+        COUNT_THRESHOLD_SLOTS,
+        client="omantel",
+        columns=COUNT_THRESHOLD_COLUMNS,
+        table="Subscriptions",
+    )
+
+    supply = result["supply"]
+    assert supply["seeds_considered"] > 1
+    assert supply["eligible"] > 1
+    assert supply["eligible_needing_adaptation"] >= 1
+    # More than one option survived, so the thin-supply advisory stays silent.
+    assert "advisory" not in supply
+    assert result["alternatives"]
+    assert all("adaptations" in item for item in result["alternatives"])
+
+
+def test_validate_warns_when_a_stated_number_is_not_rendered():
+    result = validate_rule(
+        COUNT_THRESHOLD_RULE,
+        request="To select customers who purchased any product at most 4 times in the last week",
+    )
+
+    assert result["ok"], result["errors"]
+    coverage = [item for item in result["warnings"] if item.get("class") == "coverage"]
+    assert coverage
+    assert coverage[0]["numbers"] == ["4"]
+
+
+def _intent_cues(rule: str, request: str) -> set[str]:
+    from vp_agent.tools.validate import intent_cue_warnings
+
+    return {item["cue"] for item in intent_cue_warnings(rule, request)}
+
+
+def test_intent_sweep_flags_missing_negation():
+    rule = "L_PROMO_SENT_DATE >= CurrentTime-7DAYS AND L_ACTION_KEY ${operator} ${value} AND COUNT_ALL(L_AGG_MSISDN) > 0"
+
+    assert "negation" in _intent_cues(rule, "customers who did not receive the promo last week")
+    # The same rule shape with `= 0` satisfies the cue.
+    assert "negation" not in _intent_cues(
+        rule.replace("> 0", "= 0"),
+        "customers who did not receive the promo last week",
+    )
+
+
+def test_intent_sweep_flags_missing_groupby_but_ignores_per_month():
+    rule = "SUBSCRIPTIONS_DT >= CurrentMonth-1MONTHS AND SUM(SUBSCRIPTIONS_Revenue) ${operator} ${value}"
+    request = "total revenue per product in the last month"
+
+    assert "per_entity" in _intent_cues(rule, request)
+    grouped = rule.replace(
+        "SUM(SUBSCRIPTIONS_Revenue)",
+        "SUM(SUBSCRIPTIONS_Revenue)__groupby_SUBSCRIPTIONS_Product_Id",
+    )
+    assert "per_entity" not in _intent_cues(grouped, request)
+    # "per month" is a period and "per customer" is the default grain.
+    assert "per_entity" not in _intent_cues(rule, "total revenue per month per customer")
+
+
+def test_intent_sweep_flags_missing_average_and_alternation():
+    summed = "COMMON_Event_Date >= CurrentWeek-4WEEKS AND SUM(COMMON_OG_Call_Revenue) ${operator} ${value}"
+    assert "average" in _intent_cues(summed, "average weekly revenue from outgoing calls over 4 weeks")
+
+    averaged = summed.replace("SUM(COMMON_OG_Call_Revenue)", "SUM(V{A}=f{COMMON_OG_Call_Revenue/4})")
+    assert "average" not in _intent_cues(averaged, "average weekly revenue from outgoing calls over 4 weeks")
+
+    anded = 'Profile_Cdr_Handset_Type = "smartphone" AND CUST_360_REVENUE_30D ${operator} ${value}'
+    assert "alternation" in _intent_cues(anded, "customers using a smartphone or iPhone")
+    # "or more" is a comparison phrase, not a list of alternatives.
+    assert "alternation" not in _intent_cues(anded, "customers who recharged 5 or more times")
+
+
+def test_intent_sweep_flags_dropped_service_scope():
+    generic = "COMMON_Event_Date >= CurrentTime-2DAYS AND SUM(Total_Voice_Revenue) ${operator} ${value}"
+    scoped = generic.replace("Total_Voice_Revenue", "COMMON_OG_IDD_Call_Revenue")
+    request = "revenue from international outgoing calls in the last 2 days"
+
+    assert "scope" in _intent_cues(generic, request)
+    assert "scope" not in _intent_cues(scoped, request)
+
+
+def test_intent_sweep_is_quiet_on_a_plain_request():
+    rule = 'CUST_360_HANDSET_TYPE = "SP" AND CUST_360_RECHARGE_AMOUNT_30D ${operator} ${value}'
+
+    assert _intent_cues(rule, "smartphone customers who recharged in the last 30 days") == set()
+
+
+def test_validate_surfaces_intent_warnings_alongside_errors():
+    result = validate_rule(
+        "SUBSCRIPTIONS_DT >= CurrentMonth-1MONTHS AND SUM(SUBSCRIPTIONS_Revenue) ${operator} ${value}",
+        request="total product subscription revenue per product in the last month",
+    )
+
+    assert result["ok"], result["errors"]
+    assert any(item.get("cue") == "per_entity" for item in result["warnings"] if item.get("class") == "intent")
+
+
+def test_validate_warns_when_production_uses_a_different_shape():
+    result = validate_rule(
+        COUNT_THRESHOLD_RULE,
+        request="To select customers who purchased any product at most 4 times in the last week",
+        table="Subscriptions",
+        client="omantel",
+    )
+
+    convention = [item for item in result["warnings"] if item.get("class") == "convention"]
+    assert convention
+    assert all("SUBSCRIPTIONS_Product_Id" in item["shared_columns"] for item in convention)
+    assert any(
+        "production keeps a literal aggregate threshold" in difference
+        for item in convention
+        for difference in item["differences"]
+    )
+
+
+def test_validate_production_comparison_is_skipped_without_client():
+    result = validate_rule(COUNT_THRESHOLD_RULE, request="purchased any product")
+
+    assert not [item for item in result["warnings"] if item.get("class") == "convention"]
+
+
+def test_validate_accepts_groupby_aggregate_and_skips_unrelated_production_vps():
+    rule = (
+        "SUBSCRIPTIONS_DT >= CurrentMonth-1MONTHS AND SUBSCRIPTIONS_DT < CurrentMonth "
+        "AND SUM(SUBSCRIPTIONS_Revenue)__groupby_SUBSCRIPTIONS_Product_Id ${operator} ${value}"
+    )
+
+    result = validate_rule(
+        rule,
+        request="product subscriptions whose total revenue per product in the last month is greater than a specified value",
+        table="Subscriptions",
+        client="omantel",
+    )
+
+    assert result["ok"], result["errors"]
+    # The comparison keys on the aggregated column, so count-threshold VPs that
+    # merely share a filter column must not raise a convention warning.
+    assert not [item for item in result["warnings"] if item.get("class") == "convention"]
+
+
+def test_normalize_prefers_measure_word_over_product_noun():
+    # Golden case: "total data bundle revenue ... last 1 months" is a revenue
+    # KPI, not a subscription request. The bare `bundle` keyword used to route
+    # it to the subscription domain, which reweights retrieval groups.
+    slots = normalize_slots("total data bundle revenue of a customer for the last 1 months", client="omantel")
+
+    assert slots["domain"] == "usage"
+    assert slots["time_token"] == "M1"
+
+
+def test_normalize_never_raises_clarification_from_the_regex_pass():
+    slots = normalize_slots("customers with an unparseable widget metric", client="omantel")
+
+    assert slots["needs_clarification"] is False
+    assert "domain" in slots["missing"]
+
+
+def test_model_facing_slots_withhold_semantic_fields():
+    from vp_agent.tools.normalize import model_facing_slots
+
+    parsed = normalize_slots(
+        "Prepaid smartphone customers whose total data revenue in the last 2 weeks is more than a given value",
+        client="omantel",
+    )
+    view = model_facing_slots(parsed)
+
+    assert view["operator"] == ">"
+    assert view["value"] == ""
+    assert view["time_token"] == "2W"
+    assert len(view["filters"]) == 2
+    for withheld in ("domain", "kpi_phrase", "aggregate", "needs_clarification"):
+        assert withheld not in view
+    assert "domain" in view["not_parsed"]
+    assert "kpi_phrase" in view["not_parsed"]
+
+
+def test_syntax_coverage_audit_detects_constructs_and_documentation():
+    import sys
+
+    sys.path.insert(0, str(PROJECT_DIR / "scripts"))
+    from audit_syntax_coverage import audit
+
+    report = audit("omantel")
+    by_name = {item["construct"]: item for item in report["constructs"]}
+
+    assert report["vps_scanned"] > 100
+    # Detection works against real production syntax.
+    assert by_name["not_null_guard"]["vp_count"] > 0
+    assert by_name["max_date_guard"]["vp_count"] > 0
+    # Documentation lookup works: groupby was documented, so it must read as such.
+    assert by_name["groupby_single"]["documented"] is True
+    # Production contains rules validate_rule would reject outright.
+    assert report["placeholder_rule_outliers"]["count"] > 0
+
+
+def test_normalize_distinguishes_rolling_week_from_calendar_week():
+    calendar = normalize_slots("customers who purchased any product in the last week", client="omantel")
+    rolling = normalize_slots(
+        "customers who purchased any product in the last week from today",
+        client="omantel",
+    )
+
+    assert calendar["time_token"] == "W1"
+    assert rolling["time_token"] == "7D"
 
 
 def test_select_seed_uses_airtel_notnull_data_usage_window():

@@ -23,6 +23,39 @@ METRIC_WORDS = {"uplift", "downlift", "increase", "decrease", "change", "growth"
 SUM_WORDS = {"sum", "total", "amount", "revenue", "usage", "volume", "spent", "spend"}
 PRESENCE_WORDS = {"exists", "exist", "present", "available", "has"}
 
+# Axes that describe the measured business phrase. `time`/`week` axes are
+# excluded because their phrases match on period wording alone.
+PHRASE_AXES_SKIP = {"time", "week"}
+TEMPLATE_VAR_ONLY_RE = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
+
+# Column roles the resolver can infer. `kpi_col` is the measured quantity;
+# the identifier roles are grouping/membership/join keys, which must NOT
+# resolve to the metric column.
+IDENTIFIER_ROLES = frozenset({"key_col", "grp_col", "id_col"})
+COLUMN_ROLES = frozenset({"kpi_col", "count_col", "col"}) | IDENTIFIER_ROLES
+
+# Every template variable the resolver fills itself.
+RESOLVER_FILLED_ROLES = COLUMN_ROLES | frozenset(
+    {"date_col", "N", "start", "end", "divisor", "factor", "vp_name", "threshold"}
+)
+# Variables deliberately left for the agent to supply while composing: helper
+# VP dependencies, join targets, fixed literals, and runtime parameters.
+AGENT_SUPPLIED_ROLES = frozenset(
+    {"older_vp", "newer_vp", "left_vp", "right_vp", "join_col", "literal", "X"}
+)
+KNOWN_TEMPLATE_ROLES = RESOLVER_FILLED_ROLES | AGENT_SUPPLIED_ROLES
+
+
+def _numeric_value(raw: object) -> int | float | None:
+    text = str(raw if raw is not None else "").strip()
+    if not text:
+        return None
+    try:
+        number = float(text)
+    except ValueError:
+        return None
+    return int(number) if number.is_integer() else number
+
 
 def _aggregate_intent(value: object) -> str:
     text = str(value or "").upper()
@@ -90,13 +123,24 @@ def _seed_text(seed: dict[str, Any]) -> str:
     return " ".join(map(str, parts))
 
 
+RUNTIME_PLACEHOLDER_RE = re.compile(r"\$\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
+
+
 def _required_variables(seed: dict[str, Any]) -> tuple[str, ...]:
+    """Variables the resolver must fill before the template can be used.
+
+    `${...}` names are runtime placeholders the engine substitutes later —
+    `${operator}`, `${value}`, but also `${NoOfDays}`, `${SCHEDULE_ID}`. The
+    renderer preserves them literally, so they are not resolver variables even
+    though some seeds list them under `template_variables`.
+    """
+    template = str(seed.get("output_template") or "")
+    runtime_placeholders = set(RUNTIME_PLACEHOLDER_RE.findall(template)) | {"operator", "value"}
     sig = seed.get("selection_signature") or {}
     runtime = sig.get("runtime") or {}
     variables = runtime.get("template_variables")
     if variables:
-        return tuple(v for v in variables if v not in {"operator", "value"})
-    template = seed.get("output_template") or ""
+        return tuple(v for v in variables if v not in runtime_placeholders)
     return tuple(sorted(set(re.findall(r"(?<!\$)\{([a-zA-Z_][a-zA-Z0-9_]*)\}", template))))
 
 
@@ -118,21 +162,42 @@ def _axis_time_match(seed: dict[str, Any], normalized_time: dict[str, Any]) -> t
     return 0.0, {}, None
 
 
-def _kpi_axis_score(seed: dict[str, Any], kpi_phrase: str) -> float:
+def _kpi_axis_score(seed: dict[str, Any], *request_texts: str) -> tuple[float, list[str]]:
+    """Score the request against every business axis the seed declares.
+
+    Two corrections to the previous behaviour:
+
+    - Scan every axis except the time axes. Reviewed families such as
+      `check_n_products_threshold` keep their marketer phrases under a
+      `threshold` axis, so a fixed `kpi`/`variant`/`operands` scan hid their
+      strongest evidence from ranking entirely.
+    - Score against the raw request as well as the KPI phrase. Axis
+      `input_phrases` are whole marketer sentences, so the sentence is the
+      right thing to compare them with.
+    """
     axes = seed.get("axes") or {}
-    phrase_vec = char_ngrams(kpi_phrase)
+    probes = [text for text in request_texts if str(text or "").strip()]
+    if not probes:
+        return 0.0, []
+    probe_terms = [set(expand_tokens(tokens(text))) for text in probes]
+    probe_vectors = [char_ngrams(text) for text in probes]
+
     best = 0.0
-    for axis_name in ("kpi", "variant", "operands"):
-        axis = axes.get(axis_name) or {}
-        if not isinstance(axis, dict):
+    best_phrases: list[str] = []
+    for axis_name, axis in axes.items():
+        if axis_name in PHRASE_AXES_SKIP or not isinstance(axis, dict):
             continue
         for key, value in axis.items():
-            phrases = value.get("input_phrases") if isinstance(value, dict) else []
-            axis_text = " ".join([str(key), *map(str, phrases or [])])
-            token_overlap = len(set(expand_tokens(tokens(kpi_phrase))) & set(expand_tokens(tokens(axis_text))))
-            semantic = cosine(phrase_vec, char_ngrams(axis_text)) if phrase_vec else 0.0
-            best = max(best, token_overlap * 4.0 + semantic * 8.0)
-    return best
+            phrases = [str(item) for item in ((value.get("input_phrases") if isinstance(value, dict) else []) or [])]
+            axis_text = " ".join([str(key), *phrases])
+            axis_terms = set(expand_tokens(tokens(axis_text)))
+            axis_vector = char_ngrams(axis_text)
+            for terms, vector in zip(probe_terms, probe_vectors):
+                score = len(terms & axis_terms) * 4.0 + (cosine(vector, axis_vector) if vector else 0.0) * 8.0
+                if score > best:
+                    best = score
+                    best_phrases = phrases[:2]
+    return best, best_phrases
 
 
 def _intent_score(
@@ -214,17 +279,34 @@ def _infer_column(
     table: str | None = None,
     slots: dict[str, Any] | None = None,
 ) -> str | None:
-    if role in {"kpi_col", "count_col", "col"}:
-        for column in columns:
-            group = column.get("group_name")
-            if table and table != "360_PROFILE" and group != table:
-                continue
-            data_type = str(column.get("data_type", "")).lower()
-            if role == "kpi_col" and data_type == "numeric":
-                return column.get("feature_name")
-            if role in {"count_col", "col"}:
-                return column.get("feature_name")
-        return columns[0].get("feature_name") if columns else None
+    if role in COLUMN_ROLES:
+        in_table = [
+            column
+            for column in columns
+            if not (table and table != "360_PROFILE" and column.get("group_name") != table)
+        ]
+        pool = in_table or columns
+        if not pool:
+            return None
+
+        def _first(predicate) -> str | None:
+            return next(
+                (
+                    column.get("feature_name")
+                    for column in pool
+                    if predicate(str(column.get("data_type", "")).lower())
+                ),
+                None,
+            )
+
+        if role == "kpi_col":
+            # A measured quantity is numeric.
+            return _first(lambda data_type: data_type == "numeric") or pool[0].get("feature_name")
+        if role in IDENTIFIER_ROLES:
+            # A grouping/membership key is an identifier, not the measure. Taking
+            # the first column here used to hand back the metric itself.
+            return _first(lambda data_type: data_type != "numeric") or pool[0].get("feature_name")
+        return pool[0].get("feature_name")
 
     if role == "date_col":
         # Airtel's summarized CDR uses an S_ prefix. Other stable group dates
@@ -247,6 +329,34 @@ def _infer_column(
     return None
 
 
+def _fixed_comparison_variables(seed: dict[str, Any], slots: dict[str, Any]) -> dict[str, Any]:
+    """Resolve template variables that a seed declares as a fixed comparison.
+
+    A seed such as `S30_count_threshold_30d` declares
+    `fixed_comparisons: [{function: COUNT_ALL, operator: "<=", value: "{threshold}"}]`.
+    When the request states the same operator, the stated value IS that
+    threshold, so it can be filled deterministically instead of leaving the
+    seed unusable.
+    """
+    sig = seed.get("selection_signature") or {}
+    operation = sig.get("operation") or {}
+    requested_operator = str(slots.get("operator") or "").strip()
+    value = _numeric_value(slots.get("value"))
+    if not requested_operator or value is None:
+        return {}
+
+    resolved: dict[str, Any] = {}
+    for comparison in operation.get("fixed_comparisons") or []:
+        if not isinstance(comparison, dict):
+            continue
+        if str(comparison.get("operator") or "").strip() != requested_operator:
+            continue
+        match = TEMPLATE_VAR_ONLY_RE.fullmatch(str(comparison.get("value") or "").strip())
+        if match:
+            resolved[match.group(1)] = value
+    return resolved
+
+
 def _suggest_variables(
     seed: dict[str, Any],
     required_variables: tuple[str, ...],
@@ -260,12 +370,19 @@ def _suggest_variables(
     for key in ("N", "start", "end", "divisor"):
         if key in required_variables and key in axis_values:
             variables[key] = axis_values[key]
+
+    for name, value in _fixed_comparison_variables(seed, slots).items():
+        if name in required_variables and name not in variables:
+            variables[name] = value
+    for name in ("threshold", "X"):
+        if name in required_variables and name not in variables and name in axis_values:
+            variables[name] = axis_values[name]
     if "N" in required_variables and "N" not in variables and normalized_time.get("n") is not None:
         variables["N"] = normalized_time["n"]
     if "divisor" in required_variables and "divisor" not in variables and normalized_time.get("n") is not None:
         variables["divisor"] = normalized_time["n"]
 
-    for role in ("kpi_col", "count_col", "col", "date_col"):
+    for role in (*sorted(COLUMN_ROLES), "date_col"):
         if role in required_variables:
             inferred = _infer_column(columns, role, table, slots)
             if inferred:
@@ -295,13 +412,31 @@ def _suggest_variables(
     return variables
 
 
+SEED_WINDOW_RE = re.compile(r"-\s*\{?(\d+|N)\}?\s*(DAYS|WEEKS|MONTHS)", re.I)
+
+
+def _seed_window_text(seed: dict[str, Any]) -> str:
+    match = SEED_WINDOW_RE.search(str(seed.get("output_template") or ""))
+    if not match:
+        return "unspecified window"
+    return f"{match.group(1)} {match.group(2).upper()}"
+
+
 def _seed_compatibility_failures(
     seed: dict[str, Any],
     slots: dict[str, Any],
     normalized_time: dict[str, Any],
     table: str | None,
     missing_variables: list[str],
-) -> list[str]:
+) -> tuple[list[str], list[str]]:
+    """Split structural impossibility from things the agent can adapt.
+
+    A hard failure means the template can never become this rule. Everything
+    else — a differing window unit, a variable the resolver could not infer —
+    is surfaced as an adaptation note so the agent can re-parameterise it. The
+    agent composes the final string, so removing those candidates from view
+    removed a decision that belongs to the agent.
+    """
     sig = seed.get("selection_signature") or {}
     agg_type = str(sig.get("agg_type") or "").upper()
     seed_type = str(sig.get("seed_type") or "").lower()
@@ -312,6 +447,7 @@ def _seed_compatibility_failures(
     runtime = sig.get("runtime") or {}
     composition = sig.get("composition") or {}
     failures: list[str] = []
+    adaptations: list[str] = []
 
     formula_compatible = bool(formula.get("has_formula")) or seed_type in {"derived_metric", "composite"}
     if table == "360_PROFILE" and not comparison_request:
@@ -340,16 +476,26 @@ def _seed_compatibility_failures(
             failures.append("time_window_required")
         units = set(time.get("units") or [])
         normalized_unit = normalized_time.get("unit")
+        requested_window = f"{normalized_time.get('n')} {normalized_unit}"
+        # A differing window unit is a parameterisation difference, not a
+        # structural one: the seed shape still fits, only its window needs
+        # rewriting. Keep it visible and let the agent re-parameterise.
         if normalized_unit == "MONTH_TO_DATE":
             if units or time.get("bound_style") != "equality":
-                failures.append("time_unit_mismatch")
+                adaptations.append(
+                    f"time_unit_adaptation: seed window is {_seed_window_text(seed)}; "
+                    "request is month-to-date — re-parameterise the window"
+                )
         elif normalized_unit and normalized_unit not in units:
-            failures.append("time_unit_mismatch")
+            adaptations.append(
+                f"time_unit_adaptation: seed window is {_seed_window_text(seed)}; "
+                f"request is {requested_window} — re-parameterise the window"
+            )
     elif seed_requires_time:
         failures.append("time_window_not_requested")
 
     if normalized_time.get("till_date") and time.get("has_completed_period_upper_bound"):
-        failures.append("till_date_bound_mismatch")
+        adaptations.append("till_date_adaptation: drop the completed-period upper bound")
     if composition.get("can_be_main_condition") is False:
         failures.append("cannot_be_main_condition")
 
@@ -361,8 +507,10 @@ def _seed_compatibility_failures(
     deferred_dependency_roles = {"older_vp", "newer_vp", "left_vp", "right_vp"}
     unresolved_required = [name for name in missing_variables if name not in deferred_dependency_roles]
     if unresolved_required:
-        failures.append("missing_required_variables:" + ",".join(unresolved_required))
-    return failures
+        # The agent composes the final string, so a variable the resolver could
+        # not infer is a hand-off, not a disqualification.
+        adaptations.append("supply_variables: " + ", ".join(unresolved_required))
+    return failures, adaptations
 
 
 def _structural_summary(signature: dict[str, Any]) -> str:
@@ -421,6 +569,7 @@ def build_seed_audit(
     normalized_time = normalize_time_token(slots.get("time_token"))
     query_text = phrase_text(slots)
     kpi_phrase = str(slots.get("kpi_phrase") or "")
+    raw_request = str(slots.get("raw_request") or "")
     slot_terms = set(expand_tokens(tokens(query_text)))
     query_vec = char_ngrams(query_text)
 
@@ -479,7 +628,7 @@ def build_seed_audit(
             score -= 6
             reasons.append("till-date conflicts with completed upper bound")
 
-        kpi_score = _kpi_axis_score(seed, kpi_phrase)
+        kpi_score, matched_phrases = _kpi_axis_score(seed, kpi_phrase, raw_request)
         if kpi_score:
             score += kpi_score
             reasons.append(f"kpi axis score {kpi_score:.1f}")
@@ -522,12 +671,14 @@ def build_seed_audit(
                 suggested_variables=suggested,
                 selection_signature=sig,
             )
-        failures = _seed_compatibility_failures(seed, slots, normalized_time, table, missing)
+        failures, adaptations = _seed_compatibility_failures(seed, slots, normalized_time, table, missing)
         candidates.append(
             {
                 **candidate.__dict__,
                 "eligible": not failures,
                 "gate_failures": failures,
+                "adaptations": adaptations,
+                "matched_phrases": matched_phrases,
                 "structural_summary": _structural_summary(sig),
                 "structural_fingerprint": _structural_fingerprint(sig),
             }
@@ -563,6 +714,41 @@ def build_seed_audit(
     }
 
 
+def _supply_diagnostics(candidates: list[dict[str, Any]], eligible: list[dict[str, Any]]) -> dict[str, Any]:
+    """Report how much of the catalog actually reached the agent.
+
+    Silent over-filtering is invisible from a single proposal, so state the
+    counts and the top rejection reasons before the agent starts composing.
+    """
+    gate_counts: dict[str, int] = {}
+    for candidate in candidates:
+        for failure in candidate["gate_failures"]:
+            key = failure.split(":", 1)[0]
+            gate_counts[key] = gate_counts.get(key, 0) + 1
+    adapted = sum(1 for item in eligible if item["adaptations"])
+    diagnostics = {
+        "seeds_considered": len(candidates),
+        "eligible": len(eligible),
+        "eligible_needing_adaptation": adapted,
+        "top_gate_failures": dict(sorted(gate_counts.items(), key=lambda pair: pair[1], reverse=True)[:5]),
+    }
+    # A single survivor is only a warning sign when it came from over-filtering.
+    # On the Customer 360 path the reviewed snapshot rule allows exactly one
+    # raw-comparison seed, so one option there is the intended outcome.
+    if len(eligible) == 1 and gate_counts.get("snapshot_requires_generic_raw_seed"):
+        diagnostics["note"] = (
+            "360 snapshot path: the reviewed rule permits one raw-comparison seed, so a single "
+            "option here is by design, not a shortage."
+        )
+    elif len(eligible) <= 1:
+        diagnostics["advisory"] = (
+            "Only one seed survived structural gating. Treat the proposal as weak evidence, "
+            "check top_gate_failures for a family that was rejected, and compose from the "
+            "request rather than deferring to this template."
+        )
+    return diagnostics
+
+
 def compact_seed_selection(audit: dict[str, Any], *, audit_id: str) -> dict[str, Any]:
     eligible = [item for item in audit["candidates"] if item["eligible"]]
     if not eligible:
@@ -571,6 +757,7 @@ def compact_seed_selection(audit: dict[str, Any], *, audit_id: str) -> dict[str,
             "proposed_selected_seed": None,
             "alternatives": [],
             "normalized_time": audit["normalized_time"],
+            "supply": _supply_diagnostics(audit["candidates"], eligible),
             "unresolved_reason": "no structurally compatible seed",
         }
 
@@ -594,6 +781,8 @@ def compact_seed_selection(audit: dict[str, Any], *, audit_id: str) -> dict[str,
                 "score": round(candidate["score"], 3),
                 "confidence": round(candidate["confidence"], 3),
                 "structural_difference": candidate["structural_summary"],
+                "adaptations": candidate["adaptations"],
+                "matched_phrases": candidate["matched_phrases"],
                 "evidence": _concise_seed_evidence(candidate["reason"]),
             }
         )
@@ -605,6 +794,7 @@ def compact_seed_selection(audit: dict[str, Any], *, audit_id: str) -> dict[str,
         "proposed_selected_seed": selected_response,
         "alternatives": alternatives,
         "normalized_time": audit["normalized_time"],
+        "supply": _supply_diagnostics(audit["candidates"], eligible),
     }
 
 

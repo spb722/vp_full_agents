@@ -6,6 +6,7 @@ import uuid
 from vp_agent.observability import observation, update_observation
 from vp_agent.tools.memory import episodic_lookup as episodic_lookup_core
 from vp_agent.tools.memory import queue_correction as queue_correction_core
+from vp_agent.tools.normalize import model_facing_slots
 from vp_agent.tools.normalize import normalize_slots as normalize_slots_core
 from vp_agent.tools.plan import build_condition_plan as build_condition_plan_core
 from vp_agent.tools.render import render_condition as render_condition_core
@@ -51,7 +52,8 @@ def create_vp_server():
         },
     )
     async def normalize_slots(args: dict[str, Any]) -> dict[str, Any]:
-        return _text_result(normalize_slots_core(args["request"], args.get("client")))
+        parsed = normalize_slots_core(args["request"], args.get("client"))
+        return _text_result(model_facing_slots(parsed))
 
     @tool(
         "retrieve_columns",
@@ -309,11 +311,27 @@ def create_vp_server():
 
     @tool(
         "validate_rule",
-        "Validate VP parent condition syntax, placeholder discipline, known columns, and coarse request coverage.",
-        {"rule": str, "request": str, "table": str},
+        "Validate VP parent condition syntax, placeholder discipline, known columns, coarse request coverage, unrendered stated numbers, and shape differences against existing client production VPs.",
+        {
+            "type": "object",
+            "properties": {
+                "rule": {"type": "string"},
+                "request": {"type": "string"},
+                "table": {"type": "string"},
+                "client": {"type": "string"},
+            },
+            "required": ["rule", "request"],
+        },
     )
     async def validate_rule(args: dict[str, Any]) -> dict[str, Any]:
-        return _text_result(validate_rule_core(args["rule"], args["request"], args.get("table")))
+        return _text_result(
+            validate_rule_core(
+                args["rule"],
+                args["request"],
+                args.get("table"),
+                args.get("client"),
+            )
+        )
 
     @tool(
         "episodic_lookup",

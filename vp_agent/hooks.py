@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -136,6 +137,12 @@ def make_hooks(state: ToolState):
             if tool_name == "mcp__vp__validate_rule" and isinstance(structured, dict):
                 state.validation = structured
 
+            if tool_name == "Agent":
+                verdict = _extract_verdict(tool_response)
+                if verdict:
+                    verdict["agent"] = tool_input.get("subagent_type") or tool_input.get("agent_name") or "unknown"
+                    state.verifier_verdict = verdict
+
             if tool_name == "mcp__vp__render_condition":
                 state.render_seen = True
                 condition = None
@@ -170,6 +177,39 @@ def make_hooks(state: ToolState):
         "PreToolUse": [HookMatcher(hooks=[pre_tool_use])],
         "PostToolUse": [HookMatcher(hooks=[post_tool_use])],
     }
+
+
+VERDICT_RE = re.compile(r"\bVERDICT\s*:\s*(pass|retry|ask)\b[\s—\-:]*(.*)", re.I)
+
+
+def _collect_text(value: Any, parts: list[str]) -> None:
+    if isinstance(value, str):
+        parts.append(value)
+    elif isinstance(value, dict):
+        for item in value.values():
+            _collect_text(item, parts)
+    elif isinstance(value, list):
+        for item in value:
+            _collect_text(item, parts)
+
+
+def _extract_verdict(tool_response: Any) -> dict[str, Any] | None:
+    """Pull the verifier's decision out of the subagent result.
+
+    Without this the review exists only inside the model's context: it never
+    reaches the API response or a trace, so nobody can tell how often the
+    verifier runs, what it says, or whether reworking it helped.
+    """
+    parts: list[str] = []
+    _collect_text(tool_response, parts)
+    for text in reversed(parts):
+        match = VERDICT_RE.search(text)
+        if match:
+            return {
+                "decision": match.group(1).lower(),
+                "detail": " ".join(match.group(2).split())[:500],
+            }
+    return None
 
 
 def _hook_warning(event_name: str, message: str) -> dict[str, Any]:

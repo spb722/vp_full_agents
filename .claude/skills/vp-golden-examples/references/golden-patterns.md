@@ -82,6 +82,13 @@ Choose the seed/aggregation that matches the marketer's intent:
 - "maximum data usage" -> `MAX(...)`, not `SUM(...)`.
 - "purchased product 123 or 125" as a standalone audience filter -> product
   list plus `COUNT_ALL(SUBSCRIPTIONS_Product_Id) > 0`.
+- "purchased any product at most N times in <period>" -> the reviewed
+  count-threshold family. The stated N stays LITERAL on the aggregate and the
+  runtime pair sits on the selector column:
+  `SUBSCRIPTIONS_EVENT_DATE >= CurrentTime-30DAYS AND SUBSCRIPTIONS_Product_Id ${operator} ${value} AND COUNT_ALL(SUBSCRIPTIONS_Product_Id) <= 4`
+  (production `CHECK_4_PRODUCTS_LAST_30DAYS`; seeds `S30_count_threshold_30d`
+  and `S132_check_n_products_threshold`). Re-parameterise the window for the
+  period the marketer actually asked for.
 
 ## Variant-3 Period Metrics
 
@@ -174,5 +181,12 @@ AND filters, never a list.
 - Do not use commas as the list separator; the separator is always `;`.
 - A membership filter has fixed values; it must not carry the runtime
   `${operator} ${value}` pair.
+- Do not drop a stated count threshold. "at most 4 times" must survive into the
+  rule as a literal `<= 4` whenever a selector column can carry the runtime
+  pair instead. A rule that keeps only `${operator} ${value}` has silently lost
+  the marketer's 4.
+- Do not treat a seed's `adaptations` as a rejection. A `time_unit_adaptation`
+  means re-parameterise the window; a `supply_variables` note means fill that
+  variable yourself while composing.
 - Do not expose these golden examples as exact user-facing explanations unless
   the user asks for debugging detail.

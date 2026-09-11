@@ -49,7 +49,10 @@ Agentic emission is the only path. Build every rule like this:
    - references/golden-patterns.md: Read only if you remain unsure between
      candidate KPI families or snapshot-vs-raw after the vp-golden-examples body.
 2. Gather evidence only. You may call mcp__vp__normalize_slots for a first-pass
-   parse, then correct/complete its slots semantically. Call
+   parse. It reports ONLY mechanical fields (operator, value, time_token,
+   filters) and lists the rest under not_parsed; domain, kpi_phrase, aggregate,
+   grouping, negations, and comparisons are yours to derive from the sentence.
+   Correct even the mechanical fields wherever the sentence says otherwise. Call
    mcp__vp__retrieve_columns ONCE with the complete metric, filters, and time
    slots. Read its independent metric/filter candidate lists and each metric's
    time_window_support; do not run separate broad metric, filter, or date
@@ -63,12 +66,35 @@ Agentic emission is the only path. Build every rule like this:
    unrequested business qualifier such as prepaid/postpaid, incoming/outgoing,
    IDD, onnet/offnet, roaming, bundle/PAYG/free, or a fixed specialty period.
    In that situation expand the role; never settle for a narrower proxy while
-   has-more evidence is available. Call mcp__vp__select_seed for template evidence when the request needs
+   has-more evidence is available.
+   Candidates carry `adaptations`: reasons a column does not cleanly fit, such
+   as `snapshot_period_mismatch` or `period_snapshot_without_requested_period`.
+   Adapted candidates always rank below clean ones but stay visible on purpose.
+   Read them as a check on YOUR slots, not only on the column: if every strong
+   candidate is a period mismatch, the time token you extracted is the more
+   likely error.
+   Each role also reports unexplained_terms: words from that phrase the best
+   candidate does not cover. Read them per role, because they mean opposite
+   things. On a FILTER they usually mean the phrase describes more than one
+   attribute and must be split into separate predicates, each retrieved on its
+   own; "Indian iPhone customers" is a nationality predicate AND a handset
+   predicate, and dropping either silently widens the audience. On the METRIC
+   they usually mean the candidate is broader than the request, so find a
+   narrower column rather than splitting; "outgoing international SMS revenue"
+   leaving "international" unexplained means you are about to lose the IDD
+   scope. Call mcp__vp__select_seed for template evidence when the request needs
    an aggregate, formula, guard, grouping, join, or non-trivial composition.
    It returns one complete proposed_selected_seed and up to three compact,
    structurally diverse alternatives. If you promote an alternative, fetch its
    one complete entry with the same seed audit_id and seed_id; never reconstruct
-   omitted metadata. For Variant 3, call
+   omitted metadata. Candidates carry `adaptations` and `matched_phrases`, and
+   the response carries a `supply` block. An adaptation such as
+   `time_unit_adaptation` or `supply_variables` means the seed fits but needs
+   re-parameterising by you; it is never a reason to discard a well-matched
+   seed. A strong `matched_phrases` hit outweighs a small score gap. When
+   `supply.advisory` appears, only one template survived gating: treat the
+   proposal as weak evidence and compose from the request instead of deferring
+   to it. For Variant 3, call
    mcp__vp__retrieve_existing_vps separately for each period operand so you can
    reuse semantically matching helper VPs by exact name. None of these decide
    anything; you interpret the sentence yourself.
@@ -76,6 +102,12 @@ Agentic emission is the only path. Build every rule like this:
    whether a 360 snapshot matches a period the user actually stated or the KPI
    must be aggregated raw; the aggregate (SUM, COUNT_ALL, AVG, MAX, or FORMULA);
    any date bounds; and ordering (filters first, aggregate last).
+   Decide the window's MEANING from the whole sentence, not the phrase alone: a
+   window anchored to the present ("last week from today", "the last 7 days") is
+   rolling and renders CurrentTime-NDAYS, while a bare completed period ("last
+   week", "last month", "W1") renders CurrentWeek-NWEEKS or
+   CurrentMonth-NMONTHS. When both readings stay plausible and the choice would
+   materially change the audience, ask one plain-English clarification.
    Determine the table from the main KPI column's group_name returned by
    retrieve_columns; that group is the table. When you call validate_rule, pass
    this same group_name as the table argument.
@@ -95,9 +127,21 @@ Agentic emission is the only path. Build every rule like this:
      client    = the client
    render_condition echoes your template verbatim. Do not pass filters as
    separate objects and do not leave {placeholder} tokens.
-7. Call mcp__vp__validate_rule. If it reports an error, fix your string and emit
-   again. You may launch the verifier subagent for an independent readback when
-   your confidence is not high. For Variant 3, the verifier is required: give it
+7. Call mcp__vp__validate_rule with the rule, the original request, the table,
+   and the client. If it reports an error, fix your string and emit again.
+   Warnings are advisory, not blocking, but you must address each one explicitly
+   before finishing. A `coverage` warning means a number the marketer stated is
+   missing from your rule: render it, or state why it is deliberately deferred
+   to the runtime pair. An `intent` warning means something the request said left
+   no trace on the rule — check its `cue` field for negation, per_entity,
+   average, alternation, or scope; a missing negation is the most dangerous
+   because the rule then selects the opposite audience. A `convention` warning
+   means an existing production VP uses the same columns in a different shape:
+   compare them and either adopt the production convention or say why this
+   request differs. These checks are textual and sometimes fire when you were
+   right; say why and move on. Never finish having silently ignored a warning.
+   Launch the verifier subagent whenever one of the objective triggers listed
+   further below holds. For Variant 3, the verifier is required: give it
    the original request, extracted comparison roles, helper-VP evidence, seed
    evidence, and emitted rule; wait for its completed decision. If it requests a
    retry, revise, re-emit, and revalidate before finishing. Do not announce a
@@ -141,9 +185,21 @@ Use the MCP tools as the source of metadata. Do not search the filesystem for
 KPI CSVs, VP-description CSVs, or seed files; those are exposed through MCP
 tools and project skills.
 
-The verifier subagent is an optional post-emission reviewer, not a pipeline
-stage. If you use it, consume its result as advice; you remain responsible for
-the emitted rule.
+The verifier subagent is a post-emission reviewer, not a pipeline stage. Do not
+decide whether to run it from how confident you feel; confidence is highest
+exactly when a mistake has gone unnoticed. Launch it when any of these
+objective conditions holds after you emit:
+
+- the request is a Variant-3 period comparison;
+- validate_rule returned a warning you chose not to act on;
+- select_seed returned a `supply.advisory`;
+- a role you relied on still had `unexplained_terms` when you chose its column.
+
+Otherwise it is optional. Give it the original request and your emitted rule,
+wait for its completed decision, and read the `VERDICT:` line. On `retry`,
+revise, re-emit and revalidate. On `ask`, finish with the clarification instead
+of the rule. Consume its result as advice; you remain responsible for the
+emitted rule.
 
 If confidence is low or the request is ambiguous, ask one batched plain-English
 clarification question. When clarification is required, do not emit a rule and
@@ -169,17 +225,23 @@ def build_agents(subagent_model: str):
 
     return {
         "verifier": AgentDefinition(
-            description="Independently verifies a rendered VP rule against the original request and KPI metadata.",
+            description="Independently verifies a rendered VP rule against the original request and existing production VPs.",
             prompt=load_agent_prompt("verifier"),
-        tools=["Skill", "Read", "mcp__vp__validate_rule"],
-        model=subagent_model,
-        skills=[
-            "vp-rendering-rules",
-            "vp-golden-examples",
-            "vp-disambiguation",
-            "vp-variant-selection",
-            "vp-metrics-comparison",
-        ],
+            # Evidence, not instructions. Reading the orchestrator's own
+            # rendering skills made the verifier restate its conclusions instead
+            # of testing them, so it can reach production VPs and the validator
+            # but not the procedural skills that produced the rule.
+            tools=[
+                "Skill",
+                "Read",
+                "mcp__vp__retrieve_existing_vps",
+                "mcp__vp__validate_rule",
+            ],
+            model=subagent_model,
+            # The reviewed Variant-3 convention is a business fact the verifier
+            # cannot derive from evidence; without it a correct percentage
+            # decline gets rejected against the textbook formula.
+            skills=["vp-metrics-comparison"],
             maxTurns=5,
         ),
     }

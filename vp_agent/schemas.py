@@ -59,6 +59,7 @@ class ToolState:
     resolution: dict[str, Any] | None = None
     selected_seed: str | None = None
     validation: dict[str, Any] | None = None
+    verifier_verdict: dict[str, Any] | None = None
     column_candidates: list[dict[str, Any]] = field(default_factory=list)
     retrieval_audit_ids: list[str] = field(default_factory=list)
     seed_audit_ids: list[str] = field(default_factory=list)

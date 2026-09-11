@@ -46,6 +46,7 @@ class VPBuildResponse(BaseModel):
     snapshot: bool | None = None
     slots: dict[str, Any] | None = None
     validation: dict[str, Any] | None = None
+    verifier_verdict: dict[str, Any] | None = None
     raw_text: str | None = None
     needs_clarification: bool = False
     clarification_question: str | None = None
@@ -107,6 +108,8 @@ async def build_vp(request: VPBuildRequest) -> VPBuildResponse:
                 "vp.parent_condition": response.parent_condition,
                 "vp.selected_columns": response.selected_columns,
                 "vp.warnings": response.warnings,
+                "vp.verifier_ran": response.verifier_verdict is not None,
+                "vp.verifier_decision": (response.verifier_verdict or {}).get("decision"),
                 "output.value": response.parent_condition or response.failure_reason,
             },
         )
@@ -176,6 +179,7 @@ async def _build_agentic(request: VPBuildRequest, *, request_id: str | None = No
         snapshot=resolution.get("snapshot"),
         slots=slots,
         validation=validation,
+        verifier_verdict=state.verifier_verdict,
         raw_text=raw_text or None,
         needs_clarification=needs_clarification,
         clarification_question=clarification_question,

@@ -94,7 +94,71 @@ class RetrievalIndex:
         return score
 
 
-def document_text(row: KpiMeta) -> str:
+EQUALITY_PREDICATE_RE = re.compile(
+    r"\b([A-Za-z][A-Za-z0-9_]*)\s*(?:=|!=|<>)\s*(?:'([^']+)'|\"([^\"]+)\"|([A-Za-z][A-Za-z0-9_ -]*?))"
+    r"(?=\s+AND\b|\s+OR\b|\s*\)|\s*$)",
+    re.I,
+)
+IN_LIST_PREDICATE_RE = re.compile(
+    r"\b([A-Za-z][A-Za-z0-9_]*)\s+(?:NOT\s+)?IN\s+LIST\s*\(([^)]*)\)", re.I
+)
+NON_VALUE_TOKENS = {"null", "currenttime", "currentweek", "currentmonth", "days", "weeks", "months"}
+
+
+def _candidate_values(condition: str) -> list[tuple[str, str]]:
+    pairs: list[tuple[str, str]] = []
+    for match in EQUALITY_PREDICATE_RE.finditer(condition):
+        column = match.group(1)
+        value = next((group for group in match.groups()[1:] if group), "")
+        pairs.append((column, value))
+    for match in IN_LIST_PREDICATE_RE.finditer(condition):
+        column = match.group(1)
+        for member in match.group(2).split(";"):
+            pairs.append((column, member.strip().strip("'\"")))
+    return pairs
+
+
+@lru_cache(maxsize=1)
+def column_value_vocabulary() -> dict[str, tuple[str, ...]]:
+    """Literal values each column has actually been compared against.
+
+    `kpi_meta.value_references` is sparse — `Profile_Cdr_Nationality` records
+    "NONE" — so a marketer word like "Indian" has no lexical path to its column
+    and retrieval cannot find it. Reviewed golden cases and production VPs
+    already contain `Profile_Cdr_Nationality = Indian`, so mine the vocabulary
+    from the rules the business has actually written.
+    """
+    known = {row.feature_name for row in load_kpi_meta()}
+    conditions: list[str] = []
+    for client in ("omantel", "airtel"):
+        try:
+            conditions.extend(str(row.get("PARENT_CONDITION") or "") for row in load_vp_descriptions(client))
+        except (OSError, ValueError):
+            continue
+    try:
+        from vp_agent.golden import DEFAULT_GOLDEN_PATH, load_golden_cases
+
+        conditions.extend(str(row.get("Expected Output") or "") for row in load_golden_cases(DEFAULT_GOLDEN_PATH))
+    except (OSError, ValueError, ImportError):
+        pass
+
+    vocabulary: defaultdict[str, set[str]] = defaultdict(set)
+    for condition in conditions:
+        for column, value in _candidate_values(condition):
+            if column not in known:
+                continue
+            for token in tokens(value):
+                # Keep real category words: skip numbers, engine keywords, and
+                # column-to-column comparisons.
+                # Skip numbers, date-anchor fragments like "30days", and engine
+                # keywords; keep only real category words.
+                if token[0].isdigit() or token in NON_VALUE_TOKENS or len(token) < 2:
+                    continue
+                vocabulary[column].add(token)
+    return {column: tuple(sorted(values)) for column, values in vocabulary.items()}
+
+
+def document_text(row: KpiMeta, observed_values: tuple[str, ...] = ()) -> str:
     return " ".join(
         [
             row.feature_name.replace("_", " "),
@@ -105,6 +169,7 @@ def document_text(row: KpiMeta) -> str:
             row.time_window_value,
             row.value_references,
             row.data_type,
+            " ".join(observed_values),
         ]
     )
 
@@ -114,9 +179,10 @@ def build_retrieval_index() -> RetrievalIndex:
     documents = []
     doc_freq: defaultdict[str, int] = defaultdict(int)
     total_length = 0
+    vocabulary = column_value_vocabulary()
 
     for row in load_kpi_meta():
-        text = document_text(row)
+        text = document_text(row, vocabulary.get(row.feature_name, ()))
         terms = Counter(expand_tokens(tokens(text)))
         length = sum(terms.values()) or 1
         total_length += length

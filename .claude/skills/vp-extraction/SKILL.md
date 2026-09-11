@@ -52,11 +52,28 @@ Required fields:
 
 ## Filters are predicates
 
-Emit `{"phrase", "operator", "value"}`. Use a scalar for comparison, a JSON
+Emit `{"phrase", "operator", "value"}`, plus `time_token` and `domain` on the
+filter itself when that filter has its own period or lives outside the profile
+tables — "purchased a product in the last 45 days" is
+`{"phrase": "purchased a product", "time_token": "45D", "domain": "subscription"}`.
+Without them the filter is retrieved as a period-less profile attribute and its
+own window cannot be matched. Use a scalar for comparison, a JSON
 list for membership, a two-value list for range, null for presence, and one
 string for pattern. Same-attribute alternatives become one membership filter;
 different attributes remain separate filters. Preserve stated codes/values and
 multi-word members. Do not invent syntax or values.
+
+A compound noun phrase usually hides several attributes. Split it at
+extraction time, one predicate per attribute:
+
+- "Indian iPhone customers" -> nationality predicate AND handset predicate.
+- "active prepaid smartphone users" -> status AND line type AND handset.
+- "Omani feature-phone base" -> nationality AND handset.
+
+If you leave them merged, retrieval gets one role for two columns and one of
+the attributes is silently dropped. `retrieve_columns` reports
+`unexplained_terms` per role as a safety net: on a filter role, a leftover word
+means that phrase still needs splitting.
 
 Read [references/predicate-cases.md](references/predicate-cases.md) only for a
 non-comparison operator or ambiguous operand shape. Use only confirmed operators
@@ -92,6 +109,12 @@ wording, independently of the period.
 
 - "count of / number of X" -> COUNT.
 - "total X" -> SUM.
+- "per <entity>", "for each <entity>", "by <entity>" alongside an aggregate ->
+  also set `group_by` to that entity, for example
+  `"total revenue per product"` -> aggregate SUM, `group_by: "product"`. This is
+  a separate slot from the aggregate and from any filter; the renderer turns it
+  into a `__groupby_` suffix. Dropping it changes the audience from a per-entity
+  threshold to a combined subscriber total.
 - Explicit uplift, downlift, decline, growth, ratio, percentage change, or a
   mathematical comparison between two stated periods -> FORMULA and a populated
   `comparison` object. A plain mention of two periods is not automatically a
