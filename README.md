@@ -198,6 +198,65 @@ response. Langfuse root traces are named `vp-build:<client>:<request_id>` and
 tagged with `vp-agent` plus the client name, so use `Is Root Observation = True`
 and search for the request id to isolate one API call from its tool spans.
 
+## Chat UI
+
+`/vp/build` is stateless: every call starts a fresh agent, and `session_id` only
+groups Langfuse traces. So when the agent answers with a clarification question
+instead of a rule, the only channel for carrying the answer back is the
+`sentence` string itself.
+
+`vp_agent/chat_api.py` is a small session layer that owns that. Start the VP
+agent first, then the UI:
+
+```bash
+./scripts/run_api.sh        # VP agent on :8000
+./scripts/run_chat_ui.sh    # chat UI on :8001
+```
+
+Open <http://127.0.0.1:8001>. The layer never modifies `vp_agent/api.py`, and
+the VP agent keeps receiving exactly what it receives today: one `client` and
+one plain-English `sentence`.
+
+### Clarification loop
+
+When a request comes back with `needs_clarification`, the UI shows the question
+and takes your answer. The layer then rewrites the **original** request into one
+corrected self-contained sentence and shows it to you in an editable box. Only
+after you approve does it hit `/vp/build` again.
+
+The agent never sees the question, the answer, or any hint that an earlier
+attempt happened. It receives a corrected first-time request:
+
+```
+turn 1  ->  Find customers whose total out-of-bundle data usage in the last 30 days is above a given threshold.
+            <- clarification: spend/charges, or volume consumed?
+            you: data volume consumed, not charges
+turn 2  ->  Find customers whose total out-of-bundle data volume in the last 30 days is above a given threshold.
+            <- INSTFCTDATE >= CurrentTime-30DAYS AND ... SUM(Data_Outbundle_Usage) ${operator} ${value}
+```
+
+Each round rewrites from the original plus every answer so far, never from a
+previous rewrite, so drift cannot compound as rounds stack. Rounds are capped at
+three.
+
+After each rewrite, deterministic checks compare old against new: time window
+still present, threshold wording still present, no invented numbers, no
+collapse in length. A tripped check never blocks the send -- it raises a banner
+above the confirm box, so a lost time window is visible before it becomes a rule
+with no `INSTFCTDATE` bounds.
+
+### Configuration
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `VP_CHAT_BACKEND` | `http://127.0.0.1:8000/vp/build` | VP agent endpoint |
+| `VP_CHAT_HOST` / `VP_CHAT_PORT` | `127.0.0.1` / `8001` | where the UI binds |
+
+Credentials come from the environment or `.env`; `scripts/run_chat_ui.sh` never
+holds a token. Sessions live in memory and die with the process, but resolved
+ones append to `outputs/chat_sessions.jsonl` -- a clarified sentence paired with
+a rendered condition is the shape `golden_case.csv` wants.
+
 ## Retrieval
 
 One model-facing `retrieve_columns` call now batches the metric, each filter,

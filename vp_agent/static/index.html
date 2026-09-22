@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VP Agent — Rule Builder</title>
+<style>
+  :root {
+    --bg: #f6f7f9;
+    --panel: #ffffff;
+    --ink: #16191d;
+    --muted: #6b7280;
+    --line: #e3e6ea;
+    --accent: #1f5eff;
+    --ok: #0f7b4f;
+    --ok-bg: #eaf7f0;
+    --warn: #8a5a00;
+    --warn-bg: #fff6e0;
+    --err: #a3232b;
+    --err-bg: #fdeeee;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    height: 100vh; display: flex; flex-direction: column;
+  }
+  header {
+    display: flex; align-items: center; gap: 14px;
+    padding: 12px 20px; background: var(--panel); border-bottom: 1px solid var(--line);
+  }
+  header h1 { font-size: 15px; font-weight: 650; margin: 0; letter-spacing: -0.01em; }
+  header .spacer { flex: 1; }
+  header label { font-size: 12px; color: var(--muted); margin-right: 6px; }
+  select {
+    font: inherit; font-size: 13px; padding: 5px 8px;
+    border: 1px solid var(--line); border-radius: 7px; background: #fff;
+  }
+  select:disabled { background: #f2f3f5; color: var(--muted); }
+  .sid { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+
+  main { flex: 1; display: grid; grid-template-columns: 1fr 380px; min-height: 0; }
+  #chat-col { display: flex; flex-direction: column; min-width: 0; border-right: 1px solid var(--line); }
+  #chat { flex: 1; overflow-y: auto; padding: 22px 26px; }
+  .row { max-width: 780px; margin: 0 auto 16px; }
+
+  .bubble-user {
+    margin-left: auto; max-width: 78%; background: var(--accent); color: #fff;
+    padding: 10px 14px; border-radius: 14px 14px 3px 14px; white-space: pre-wrap;
+  }
+  .card {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 12px; padding: 14px 16px; max-width: 88%;
+  }
+  .card h3 {
+    margin: 0 0 9px; font-size: 11px; font-weight: 700;
+    letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted);
+  }
+  .card.ok { border-left: 3px solid var(--ok); }
+  .card.ask { border-left: 3px solid var(--accent); }
+  .card.bad { border-left: 3px solid var(--err); }
+
+  .cond {
+    font-family: var(--mono); font-size: 12.5px; line-height: 1.65;
+    background: var(--ok-bg); border: 1px solid #cfe8dc; color: #0b3a26;
+    padding: 12px 14px; border-radius: 8px; word-break: break-word; white-space: pre-wrap;
+  }
+  .meta { margin-top: 9px; font-size: 12px; color: var(--muted); }
+
+  textarea {
+    width: 100%; font: inherit; padding: 10px 12px; resize: vertical;
+    border: 1px solid var(--line); border-radius: 9px; background: #fff; color: var(--ink);
+  }
+  textarea:focus, input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  input[type=text] {
+    width: 100%; font: inherit; padding: 9px 12px;
+    border: 1px solid var(--line); border-radius: 9px;
+  }
+
+  button {
+    font: inherit; font-size: 13px; font-weight: 550; cursor: pointer;
+    padding: 7px 14px; border-radius: 8px; border: 1px solid var(--line); background: #fff;
+  }
+  button:hover:not(:disabled) { background: #f2f3f5; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.primary:hover:not(:disabled) { background: #1a4fd8; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .actions { display: flex; gap: 8px; margin-top: 10px; align-items: center; }
+
+  .banner {
+    padding: 9px 12px; border-radius: 8px; font-size: 12.5px; margin-bottom: 10px;
+    background: var(--warn-bg); border: 1px solid #f0dcaa; color: var(--warn);
+  }
+  .banner.err { background: var(--err-bg); border-color: #f2cdcd; color: var(--err); }
+  .banner ul { margin: 4px 0 0; padding-left: 18px; }
+
+  .status {
+    text-align: center; color: var(--muted); font-size: 12.5px; padding: 6px 0;
+  }
+  .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+         background: var(--accent); margin-right: 7px; animation: pulse 1.1s infinite; }
+  @keyframes pulse { 0%,100% { opacity: 0.25; } 50% { opacity: 1; } }
+
+  #composer { border-top: 1px solid var(--line); background: var(--panel); padding: 14px 26px; }
+  #composer .inner { max-width: 780px; margin: 0 auto; display: flex; gap: 10px; align-items: flex-end; }
+  #composer textarea { min-height: 46px; max-height: 160px; }
+
+  #evidence { overflow-y: auto; background: var(--panel); padding: 18px 20px; }
+  #evidence h2 {
+    font-size: 11px; font-weight: 700; letter-spacing: 0.07em;
+    text-transform: uppercase; color: var(--muted); margin: 0 0 14px;
+  }
+  .ev { margin-bottom: 14px; }
+  .ev-k { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin-bottom: 3px; }
+  .ev-v { font-family: var(--mono); font-size: 12px; word-break: break-word; white-space: pre-wrap; }
+  .pill {
+    display: inline-block; font-family: var(--mono); font-size: 11.5px;
+    background: #eef1f6; border: 1px solid var(--line); border-radius: 6px;
+    padding: 2px 7px; margin: 0 4px 4px 0;
+  }
+  .empty { color: var(--muted); font-size: 13px; font-style: italic; }
+  details { margin-top: 8px; }
+  summary { cursor: pointer; font-size: 12px; color: var(--muted); }
+  details pre {
+    font-family: var(--mono); font-size: 11.5px; background: #f4f5f7;
+    border: 1px solid var(--line); border-radius: 7px; padding: 10px;
+    overflow-x: auto; margin: 8px 0 0; white-space: pre-wrap; word-break: break-word;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>VP Agent · Rule Builder</h1>
+  <span class="sid" id="sid"></span>
+  <div class="spacer"></div>
+  <label for="client">Client</label>
+  <select id="client">
+    <option value="omantel">omantel</option>
+    <option value="airtel">airtel</option>
+  </select>
+</header>
+
+<main>
+  <div id="chat-col">
+    <div id="chat">
+      <div class="row">
+        <div class="card">
+          <h3>Start</h3>
+          <div>Describe the audience you want in plain English. If the agent needs a
+          clarification, answer it and I'll rewrite your request into one corrected
+          sentence — you approve it before it's sent.</div>
+          <div class="meta">Example: <em>Find customers whose total out-of-bundle data usage
+          in the last 30 days is above a given threshold.</em></div>
+        </div>
+      </div>
+    </div>
+    <div id="composer">
+      <div class="inner">
+        <textarea id="input" rows="1" placeholder="Describe your audience…"></textarea>
+        <button class="primary" id="send">Send</button>
+      </div>
+    </div>
+  </div>
+
+  <aside id="evidence">
+    <h2>Evidence</h2>
+    <div id="ev-body"><div class="empty">No rule built yet.</div></div>
+  </aside>
+</main>
+
+<script>
+const chat = document.getElementById('chat');
+const input = document.getElementById('input');
+const sendBtn = document.getElementById('send');
+const clientSel = document.getElementById('client');
+const sidEl = document.getElementById('sid');
+const evBody = document.getElementById('ev-body');
+
+let sessionId = null;
+let busy = false;
+let started = false;
+
+// --- helpers ---------------------------------------------------------------
+
+function el(tag, cls, text) {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text !== undefined) n.textContent = text;
+  return n;
+}
+function addRow(node) {
+  const row = el('div', 'row');
+  row.appendChild(node);
+  chat.appendChild(row);
+  chat.scrollTop = chat.scrollHeight;
+  return row;
+}
+function setBusy(on) {
+  busy = on;
+  sendBtn.disabled = on;
+  input.disabled = on;
+  document.querySelectorAll('.turn-btn').forEach(b => b.disabled = on);
+}
+async function api(path, body) {
+  const res = await fetch(path, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body)
+  });
+  const data = await res.json().catch(() => ({detail: res.statusText}));
+  if (!res.ok) throw new Error(data.detail || ('HTTP ' + res.status));
+  return data;
+}
+
+// --- session ---------------------------------------------------------------
+
+async function newSession() {
+  const data = await api('/api/session', {client: clientSel.value});
+  sessionId = data.session_id;
+  sidEl.textContent = sessionId;
+}
+clientSel.addEventListener('change', () => { if (!started) newSession(); });
+
+// --- sending ---------------------------------------------------------------
+
+// Blocking call. The agent takes ~50s on a typical request and the suite
+// allows up to 300s, so the wait gets a live counter rather than a bare
+// spinner that reads as "hung".
+async function ask(sentence) {
+  if (!started) { started = true; clientSel.disabled = true; }
+  setBusy(true);
+
+  const status = el('div', 'status');
+  const dot = el('span', 'dot');
+  const label = el('span', null, 'Building rule… 0s');
+  status.appendChild(dot); status.appendChild(label);
+  const statusRow = addRow(status);
+
+  const t0 = Date.now();
+  const tick = setInterval(() => {
+    label.textContent = 'Building rule… ' + Math.round((Date.now() - t0) / 1000) + 's';
+  }, 1000);
+
+  try {
+    const data = await api(`/api/session/${sessionId}/ask`, {sentence});
+    clearInterval(tick);
+    statusRow.remove();
+    render(data);
+  } catch (err) {
+    clearInterval(tick);
+    statusRow.remove();
+    renderError(err.message);
+  } finally {
+    setBusy(false);
+  }
+}
+
+function submitTyped() {
+  const text = input.value.trim();
+  if (!text || busy) return;
+  input.value = '';
+  input.style.height = 'auto';
+  addRow(el('div', 'bubble-user', text));
+  ask(text);
+}
+sendBtn.addEventListener('click', submitTyped);
+input.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submitTyped(); }
+});
+input.addEventListener('input', () => {
+  input.style.height = 'auto';
+  input.style.height = Math.min(input.scrollHeight, 160) + 'px';
+});
+
+// --- rendering the three branches -------------------------------------------
+
+function render(data) {
+  const r = data.response;
+  if (data.branch === 'resolved') renderOk(r, data);
+  else if (data.branch === 'clarification') renderAsk(r, data);
+  else renderFail(r, data);
+  renderEvidence(r, data);
+}
+
+function renderOk(r, data) {
+  const card = el('div', 'card ok');
+  card.appendChild(el('h3', null, 'Parent condition'));
+  card.appendChild(el('div', 'cond', r.parent_condition));
+
+  const warns = r.warnings || [];
+  if (warns.length) {
+    const b = el('div', 'banner');
+    b.appendChild(el('div', null, 'Validation warnings'));
+    const ul = el('ul');
+    warns.forEach(w => ul.appendChild(el('li', null, w)));
+    b.appendChild(ul);
+    card.appendChild(b);
+  }
+
+  const actions = el('div', 'actions');
+  const copy = el('button', 'turn-btn', 'Copy');
+  copy.onclick = () => {
+    navigator.clipboard.writeText(r.parent_condition);
+    copy.textContent = 'Copied';
+    setTimeout(() => copy.textContent = 'Copy', 1400);
+  };
+  const refine = el('button', 'turn-btn', 'Refine');
+  refine.onclick = () => { input.value = data.sentence_sent; input.focus(); };
+  actions.appendChild(copy);
+  actions.appendChild(refine);
+  actions.appendChild(el('span', 'meta', `${data.elapsed_sec}s · ${r.request_id}`));
+  card.appendChild(actions);
+  addRow(card);
+}
+
+function renderAsk(r, data) {
+  const card = el('div', 'card ask');
+  card.appendChild(el('h3', null, `Clarification needed · round ${data.clarification_round} of ${data.max_rounds}`));
+  card.appendChild(el('div', null, r.clarification_question));
+
+  if (data.rounds_exhausted) {
+    const b = el('div', 'banner');
+    b.textContent = 'This has gone past ' + data.max_rounds + ' rounds. Consider editing the '
+      + 'sentence directly in the box below instead of answering again.';
+    card.style.marginBottom = '0';
+    card.appendChild(b);
+  }
+
+  const answer = el('input');
+  answer.type = 'text';
+  answer.placeholder = 'Your answer…';
+  answer.style.marginTop = '10px';
+  card.appendChild(answer);
+
+  const actions = el('div', 'actions');
+  const submit = el('button', 'primary turn-btn', 'Rephrase request');
+  submit.onclick = async () => {
+    const text = answer.value.trim();
+    if (!text) return;
+    submit.disabled = true;
+    answer.disabled = true;
+    try {
+      const rp = await api(`/api/session/${sessionId}/rephrase`, {answer: text});
+      renderConfirm(rp);
+    } catch (err) {
+      renderError(err.message);
+      submit.disabled = false;
+      answer.disabled = false;
+    }
+  };
+  answer.addEventListener('keydown', e => { if (e.key === 'Enter') submit.click(); });
+  actions.appendChild(submit);
+  card.appendChild(actions);
+  addRow(card);
+  answer.focus();
+}
+
+// The confirm step. The rephrased sentence is shown BEFORE anything is sent,
+// and it is editable — so a bad rewrite is something you fix in two seconds
+// rather than a wrong rule you debug later.
+function renderConfirm(rp) {
+  const card = el('div', 'card');
+  card.appendChild(el('h3', null, 'Re-running with this corrected request'));
+
+  if (rp.warnings && rp.warnings.length) {
+    const b = el('div', 'banner err');
+    b.appendChild(el('div', null, 'Check this rewrite before sending:'));
+    const ul = el('ul');
+    rp.warnings.forEach(w => ul.appendChild(el('li', null, w)));
+    b.appendChild(ul);
+    card.appendChild(b);
+  }
+
+  const box = el('textarea');
+  box.rows = 3;
+  box.value = rp.sentence;
+  card.appendChild(box);
+  card.appendChild(el('div', 'meta',
+    'The agent sees only this sentence — not the question, not your answer.'));
+
+  const actions = el('div', 'actions');
+  const send = el('button', 'primary turn-btn', 'Send');
+  send.onclick = () => {
+    const text = box.value.trim();
+    if (!text) return;
+    box.disabled = true;
+    send.disabled = true;
+    cancel.disabled = true;
+    addRow(el('div', 'bubble-user', text));
+    ask(text);
+  };
+  const cancel = el('button', 'turn-btn', 'Discard');
+  cancel.onclick = () => card.closest('.row').remove();
+  actions.appendChild(send);
+  actions.appendChild(cancel);
+  card.appendChild(actions);
+  addRow(card);
+  box.focus();
+}
+
+function renderFail(r, data) {
+  const card = el('div', 'card bad');
+  card.appendChild(el('h3', null, 'No rule produced'));
+  card.appendChild(el('div', null, r.failure_reason || 'The agent returned no parent condition.'));
+
+  (r.warnings || []).forEach(w => {
+    const b = el('div', 'banner');
+    b.textContent = w;
+    b.style.marginTop = '10px';
+    b.style.marginBottom = '0';
+    card.appendChild(b);
+  });
+
+  if (r.diagnostics) {
+    const d = el('details');
+    d.appendChild(el('summary', null, 'Diagnostics'));
+    d.appendChild(el('pre', null, JSON.stringify(r.diagnostics, null, 2)));
+    card.appendChild(d);
+  }
+
+  const actions = el('div', 'actions');
+  const retry = el('button', 'turn-btn', 'Retry same sentence');
+  retry.onclick = () => { addRow(el('div', 'bubble-user', data.sentence_sent)); ask(data.sentence_sent); };
+  const edit = el('button', 'turn-btn', 'Edit and retry');
+  edit.onclick = () => { input.value = data.sentence_sent; input.focus(); };
+  actions.appendChild(retry);
+  actions.appendChild(edit);
+  actions.appendChild(el('span', 'meta', `${data.elapsed_sec}s · ${r.request_id}`));
+  card.appendChild(actions);
+  addRow(card);
+}
+
+function renderError(message) {
+  const card = el('div', 'card bad');
+  card.appendChild(el('h3', null, 'Request failed'));
+  card.appendChild(el('div', null, message));
+  addRow(card);
+}
+
+// --- evidence panel ---------------------------------------------------------
+
+function renderEvidence(r, data) {
+  evBody.innerHTML = '';
+  const add = (key, node) => {
+    const wrap = el('div', 'ev');
+    wrap.appendChild(el('div', 'ev-k', key));
+    wrap.appendChild(node);
+    evBody.appendChild(wrap);
+  };
+  const text = v => el('div', 'ev-v', v === null || v === undefined || v === '' ? '—' : String(v));
+  const pills = list => {
+    const box = el('div');
+    if (!list || !list.length) return text('—');
+    list.forEach(v => box.appendChild(el('span', 'pill', v)));
+    return box;
+  };
+  const json = (label, value) => {
+    const d = el('details');
+    d.appendChild(el('summary', null, label));
+    d.appendChild(el('pre', null, JSON.stringify(value, null, 2)));
+    return d;
+  };
+
+  add('Status', text(data.branch));
+  add('Elapsed', text(data.elapsed_sec + 's'));
+  add('Request id', text(r.request_id));
+  add('Columns', pills(r.selected_columns));
+  add('Existing VPs', pills(r.selected_vps));
+  add('Seed', text(r.seed));
+  add('Path', text(r.path));
+  add('Snapshot', text(r.snapshot));
+  if (r.slots) add('Slots', json('slots', r.slots));
+  if (r.validation) add('Validation', json('validation', r.validation));
+  if (r.verifier_verdict) add('Verifier', json('verifier_verdict', r.verifier_verdict));
+  add('Sentence sent', text(data.sentence_sent));
+}
+
+newSession();
+</script>
+</body>
+</html>
