@@ -1,0 +1,62 @@
+[
+  {
+    "case": "C1",
+    "request_id": "C1-test-20260916-001",
+    "sentence": "Find customers who received a promotion at most 2 times in the last 7 days.",
+    "expected_parent_condition": "L_PROMO_SENT_DATE >= CurrentTime-7DAYS AND LC_ACTION_TYPE IN LIST (Promotion;PROMOTION;promotion) AND L_ACTION_KEY ${operator} ${value} AND COUNT_ALL(L_AGG_MSISDN) <= 2",
+    "returned_parent_condition": "L_SENT_DATE >= CurrentTime-7DAYS AND LC_ACTION_TYPE IN LIST (Promotion;PROMOTION;promotion) AND COUNT_ALL(L_AGG_MSISDN) ${operator} ${value}",
+    "clarification": null,
+    "ok": true,
+    "failure_reason": null,
+    "elapsed_sec": 89.2,
+    "error": null
+  },
+  {
+    "case": "C2",
+    "request_id": "C2-test-20260916-002",
+    "sentence": "Find customers who have received fewer than 3 bonuses in the last 30 days.",
+    "expected_parent_condition": "L_BONUS_SENT_DATE >= CurrentTime-30DAYS AND LC_ACTION_TYPE IN LIST (BONUS;Bonus;bonus) AND L_BONUS_ACTION_KEY ${operator} ${value} AND COUNT_ALL(L_AGG_MSISDN) < 3",
+    "returned_parent_condition": "L_SENT_DATE >= CurrentTime-30DAYS AND LC_ACTION_TYPE IN LIST (BONUS;Bonus;bonus) AND COUNT_ALL(L_AGG_MSISDN) ${operator} ${value}",
+    "clarification": null,
+    "ok": true,
+    "failure_reason": null,
+    "elapsed_sec": 98.9,
+    "error": null
+  },
+  {
+    "case": "C3",
+    "request_id": "C3-test-20260916-003",
+    "sentence": "Find customers who received a promotion or its control-group variant.",
+    "expected_parent_condition": "(L_ACTION_KEY ${operator} ${value} OR L_ACTION_KEY ${operator} ${value}_CG) AND COUNT_ALL(L_AGG_CNT)__groupby_L_ACTION_KEY > 0",
+    "returned_parent_condition": null,
+    "clarification": null,
+    "ok": false,
+    "failure_reason": "The agent did not call mcp__vp__render_condition. Tools completed before render: Skill, mcp__vp__normalize_slots, mcp__vp__retrieve_columns, mcp__vp__retrieve_existing_vps.",
+    "elapsed_sec": 58.3,
+    "error": null
+  },
+  {
+    "case": "C4",
+    "request_id": "C4-test-20260916-004",
+    "sentence": "Find customers who did not receive a bonus or its control-group variant.",
+    "expected_parent_condition": "(L_BONUS_ACTION_KEY ${operator} ${value} OR L_BONUS_ACTION_KEY ${operator} ${value}_CG) AND COUNT_ALL(L_AGG_CNT)__groupby_L_BONUS_ACTION_KEY = 0",
+    "returned_parent_condition": null,
+    "clarification": "What does \"control-group variant\" refer to\u2014is it a separate marker in the data distinguishing control-group customers from those who received the bonus, or does it mean customers with no bonus event at all?",
+    "ok": false,
+    "failure_reason": "Clarification needed before rendering.",
+    "elapsed_sec": 55.6,
+    "error": null
+  },
+  {
+    "case": "C5",
+    "request_id": "C5-test-20260916-005",
+    "sentence": "Find customers who received a promotion exactly 3 times today.",
+    "expected_parent_condition": "L_SENT_DATE = CurrentTime AND LC_ACTION_TYPE IN LIST (Promotion;PROMOTION;promotion) AND L_ACTION_KEY ${operator} ${value} AND COUNT_ALL(L_AGG_CNT) = 3",
+    "returned_parent_condition": "L_SENT_DATE >= CurrentTime-1DAYS AND LC_ACTION_TYPE IN LIST (Promotion;PROMOTION;promotion) AND COUNT_ALL(L_AGG_MSISDN) ${operator} ${value}",
+    "clarification": null,
+    "ok": true,
+    "failure_reason": null,
+    "elapsed_sec": 95.4,
+    "error": null
+  }
+]

@@ -1,0 +1,2433 @@
+{
+  "summary": {
+    "total_cases": 62,
+    "with_missing_expected_metric": 18,
+    "with_measure_mismatch_on_existing": 0,
+    "with_ambiguous_revenue_usage_wording": 0,
+    "kpi_meta_path": "/Users/sachinpb/PycharmProjects/Virtual_profile_agent/data/kpi_meta.csv",
+    "note": "No kpi_meta changes made. Audit only."
+  },
+  "cases": [
+    {
+      "case": "E01",
+      "input": "Find customers whose average daily SMS revenue over the last 90 days is above a given threshold.",
+      "expected_parent_condition": "INSTFCTDATE >= CurrentTime-90DAYS AND INSTFCTDATE < CurrentTime AND SUM(V{AVG_DAILY_OG_SMS_REV}=f{Total_SMS_Revenue/90}) ${operator} ${value}",
+      "request_measure": "money",
+      "expected_metrics": [
+        {
+          "expected_column": "Total_SMS_Revenue",
+          "in_kpi_meta": true,
+          "actual_name": "Total_SMS_Revenue",
+          "value_type": "amount",
+          "description": "Total revenue generated from SMS usage, including local, roaming, international, and out-of-bundle SMS charges",
+          "group_name": "Instant_cdr_group",
+          "inferred_measure": "money",
+          "case_insensitive_rename": false
+        }
+      ],
+      "expected_dates": [
+        {
+          "expected": "INSTFCTDATE",
+          "in_kpi_meta": false,
+          "live_event_dates": [
+            "created_date",
+            "COMMON_Event_Date",
+            "FCT_DT",
+            "event_timestamp"
+          ]
+        }
+      ],
+      "issues": [
+        "expected_date_INSTFCTDATE_missing"
+      ]
+    },
+    {
+      "case": "E02",
+      "input": "Find customers whose total SMS revenue in the last 30 days is above a given threshold.",
+      "expected_parent_condition": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(Total_SMS_Revenue) ${operator} ${value}",
+      "request_measure": "money",
+      "expected_metrics": [
+        {
+          "expected_column": "Total_SMS_Revenue",
+          "in_kpi_meta": true,
+          "actual_name": "Total_SMS_Revenue",
+          "value_type": "amount",
+          "description": "Total revenue generated from SMS usage, including local, roaming, international, and out-of-bundle SMS charges",
+          "group_name": "Instant_cdr_group",
+          "inferred_measure": "money",
+          "case_insensitive_rename": false
+        }
+      ],
+      "expected_dates": [
+        {
+          "expected": "INSTFCTDATE",
+          "in_kpi_meta": false,
+          "live_event_dates": [
+            "created_date",
+            "COMMON_Event_Date",
+            "FCT_DT",
+            "event_timestamp"
+          ]
+        }
+      ],
+      "issues": [
+        "expected_date_INSTFCTDATE_missing"
+      ]
+    },
+    {
+      "case": "E03",
+      "input": "Find customers whose total data revenue in the last 30 days is above a given threshold.",
+      "expected_parent_condition": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(Total_Data_Revenue) ${operator} ${value}",
+      "request_measure": "money",
+      "expected_metrics": [
+        {
+          "expected_column": "Total_Data_Revenue",
+          "in_kpi_meta": true,
+          "actual_name": "Total_Data_Revenue",
+          "value_type": "amount",
+          "description": "Total revenue generated from mobile data usage, including local, roaming, and out-of-bundle data charges.",
+          "group_name": "Instant_cdr_group",
+          "inferred_measure": "money",
+          "case_insensitive_rename": false
+        }
+      ],
+      "expected_dates": [
+        {
+          "expected": "INSTFCTDATE",
+          "in_kpi_meta": false,
+          "live_event_dates": [
+            "created_date",
+            "COMMON_Event_Date",
+            "FCT_DT",
+            "event_timestamp"
+          ]
+        }
+      ],
+      "issues": [
+        "expected_date_INSTFCTDATE_missing"
+      ]
+    },
+    {
+      "case": "E04",
+      "input": "Find customers whose total uploaded data volume in the last 30 days is above a given threshold.",
+      "expected_parent_condition": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(Data_Upload) ${operator} ${value}",
+      "request_measure": "volume",
+      "expected_metrics": [
+        {
+          "expected_column": "Data_Upload",
+          "in_kpi_meta": false,
+          "actual_name": null,
+          "value_type": null,
+          "description": null,
+          "inferred_measure": null,
+          "live_near_matches": []
+        }
+      ],
+      "expected_dates": [
+        {
+          "expected": "INSTFCTDATE",
+          "in_kpi_meta": false,
+          "live_event_dates": [
+            "created_date",
+            "COMMON_Event_Date",
+            "FCT_DT",
+            "event_timestamp"
+          ]
+        }
+      ],
+      "issues": [
+        "expected_date_INSTFCTDATE_missing",
+        "missing_column"
+      ]
+    },
+    {
+      "case": "E05",
+      "input": "Find customers whose total data roaming revenue in the last 30 days is above a given threshold.",
+      "expected_parent_condition": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(Data_Roaming_Revenue) ${operator} ${value}",
+      "request_measure": "money",
+      "expected_metrics": [
+        {
+          "expected_column": "Data_Roaming_Revenue",
+          "in_kpi_meta": false,
+          "actual_name": null,
+          "value_type": null,
+          "description": null,
+          "inferred_measure": null,
+          "live_near_matches": [
+            {
+              "name": "CUST_360_DATA_REVENUE_ROAMING_FINANCE_REV_W8",
+              "value_type": "count",
+              "description": "Represents the total roaming data revenue generated by the subscriber between 56 days ago and 50 day ago."
+            },
+            {
+              "name": "CUST_360_DATA_REVENUE_ROAMING_FINANCE_REV_W7",
+              "value_type": "count",
+              "description": "Represents the total roaming data revenue generated by the subscriber between 49 days ago and 43 day ago."
+            },
+            {
+              "name": "CUST_360_DATA_REVENUE_ROAMING_FINANCE_REV_W6",
+              "value_type": "count",
+              "description": "Represents the total roaming data revenue generated by the subscriber between 42 days ago and 36 day ago."
+            },
+            {
+              "name": "CUST_360_DATA_REVENUE_ROAMING_FINANCE_REV_W5",
+              "value_type": "count",
+              "description": "Represents the total roaming data revenue generated by the subscriber between 35 days ago and 29 day ago."
+            },
+            {
+              "name": "CUST_360_DATA_REVENUE_ROAMING_FINANCE_REV_W4",
+              "value_type": "count",
+              "description": "Represents the total roaming data revenue generated by the subscriber between 28 days ago and 22 day ago."
+            }
+          ]
+        }
+      ],
+      "expected_dates": [
+        {
+          "expected": "INSTFCTDATE",
+          "in_kpi_meta": false,
+          "live_event_dates": [
+            "created_date",
+            "COMMON_Event_Date",
+            "FCT_DT",
+            "event_timestamp"
+          ]
+        }
+      ],
+      "issues": [
+        "expected_date_INSTFCTDATE_missing",
+        "missing_column"
+      ]
+    },
+    {
+      "case": "E06",
+      "input": "Find customers whose total out-of-bundle data usage in the last 30 days is above a given threshold.",
+      "expected_parent_condition": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(Data_Outbundle_Usage) ${operator} ${value}",
+      "request_measure": "volume",
+      "expected_metrics": [
+        {
+          "expected_column": "Data_Outbundle_Usage",
+          "in_kpi_meta": false,
+          "actual_name": null,
+          "value_type": null,
+          "description": null,
+          "inferred_measure": null,
+          "live_near_matches": [
+            {
+              "name": "Total_Data_usage",
+              "value_type": "volume",
+              "description": "Total volume of mobile data consumed by the subscriber"
+            },
+            {
+              "name": "Data_Outbundle_Revenue",
+              "value_type": "amount",
+              "description": "Revenue generated from mobile data usage outside the subscriber\u2019s subscribed data bundle or allowance"
+            },
+            {
+              "name": "CUST_360_FAVOURITE_HOUR_DATA_USAGE_MTD",
+              "value_type": "count",
+              "description": ""
+            },
+            {
+              "name": "CUST_360_FAVOURITE_HOUR_DATA_USAGE_M2",
+              "value_type": "count",
+              "description": ""
+            },
+            {
+              "name": "CUST_360_FAVOURITE_HOUR_DATA_USAGE_M1",
+              "value_type": "count",
+              "description": ""
+            }
+          ]
+        }
+      ],
+      "expected_dates": [
+        {
+          "expected": "INSTFCTDATE",
+          "in_kpi_meta": false,
+          "live_event_dates": [
+            "created_date",
+            "COMMON_Event_Date",
+            "FCT_DT",
+            "event_timestamp"
+          ]
+        }
+      ],
+      "issues": [
+        "expected_date_INSTFCTDATE_missing",
+        "missing_column"
+      ]
+    },
+    {
+      "case": "E07",
+      "input": "Find customers whose total out-of-bundle data revenue in the last 30 days is above a given threshold.",
+      "expected_parent_condition": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(Data_Outbundle_Revenue) ${operator} ${value}",
+      "request_measure": "money",
+      "expected_metrics": [
+        {
+          "expected_column": "Data_Outbundle_Revenue",
+          "in_kpi_meta": true,
+          "actual_name": "Data_Outbundle_Revenue",
+          "value_type": "amount",
+          "description": "Revenue generated from mobile data usage outside the subscriber\u2019s subscribed data bundle or allowance",
+          "group_name": "Instant_cdr_group",
+          "inferred_measure": "money",
+          "case_insensitive_rename": false
+        }
+      ],
+      "expected_dates": [
+        {
+          "expected": "INSTFCTDATE",
+          "in_kpi_meta": false,
+          "live_event_dates": [
+            "created_date",
+            "COMMON_Event_Date",
+            "FCT_DT",
+            "event_timestamp"
+          ]
+        }
+      ],
+      "issues": [
+        "expected_date_INSTFCTDATE_missing"
+      ]
+    },
+    {
+      "case": "E08",
+      "input": "Find customers whose total in-bundle data usage in the last 30 days is above a given threshold.",
+      "expected_parent_condition": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(Data_Inbundle_Usage) ${operator} ${value}",
+      "request_measure": "volume",
+      "expected_metrics": [
+        {
+          "expected_column": "Data_Inbundle_Usage",
+          "in_kpi_meta": false,
+          "actual_name": null,
+          "value_type": null,
+          "description": null,
+          "inferred_measure": null,
+          "live_near_matches": [
+            {
+              "name": "Total_Data_usage",
+              "value_type": "volume",
+              "description": "Total volume of mobile data consumed by the subscriber"
+            },
+            {
+              "name": "CUST_360_FAVOURITE_HOUR_DATA_USAGE_MTD",
+              "value_type": "count",
+              "description": ""
+            },
+            {
+              "name": "CUST_360_FAVOURITE_HOUR_DATA_USAGE_M2",
+              "value_type": "count",
+              "description": ""
+            },
+            {
+              "name": "CUST_360_FAVOURITE_HOUR_DATA_USAGE_M1",
+              "value_type": "count",
+              "description": ""
+            }
+          ]
+        }
+      ],
+      "expected_dates": [
+        {
+          "expected": "INSTFCTDATE",
+          "in_kpi_meta": false,
+          "live_event_dates": [
+            "created_date",
+            "COMMON_Event_Date",
+            "FCT_DT",
+            "event_timestamp"
+          ]
+        }
+      ],
+      "issues": [
+        "expected_date_INSTFCTDATE_missing",
+        "missing_column"
+      ]
+    },
+    {
+      "case": "E09",
+      "input": "Find customers whose total in-bundle data revenue in the last 30 days is above a given threshold.",
+      "expected_parent_condition": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(Data_Inbundle_Revenue) ${operator} ${value}",
+      "request_measure": "money",
+      "expected_metrics": [
+        {
+          "expected_column": "Data_Inbundle_Revenue",
+          "in_kpi_meta": false,
+          "actual_name": null,
+          "value_type": null,
+          "description": null,
+          "inferred_measure": null,
+          "live_near_matches": [
+            {
+              "name": "Total_Data_Revenue",
+              "value_type": "amount",
+              "description": "Total revenue generated from mobile data usage, including local, roaming, and out-of-bundle data charges."
+            },
+            {
+              "name": "TOTAL_DATA_REVENUE_FINANCE_REV_M3",
+              "value_type": "count",
+              "description": "Represents the total data revenue generated by the subscriber during the 3rd previous calender month, including local and roaming data revenue."
+            },
+            {
+              "name": "TOTAL_DATA_REVENUE_FINANCE_REV_M2",
+              "value_type": "count",
+              "description": "Represents the total data revenue generated by the subscriber during the 2nd previous calender month, including local and roaming data revenue."
+            },
+            {
+              "name": "TOTAL_DATA_REVENUE_FINANCE_REV_M1",
+              "value_type": "count",
+              "description": "Represents the total data revenue generated by the subscriber during the previous calender month, including local and roaming data revenue."
+            },
+            {
+              "name": "TOTAL_DATA_REVENUE_FINANCE_REV_90D",
+              "value_type": "count",
+              "description": "Represents the total data revenue generated by the subscriber during the last 90 days, including local and roaming data revenue."
+            }
+          ]
+        }
+      ],
+      "expected_dates": [
+        {
+          "expected": "INSTFCTDATE",
+          "in_kpi_meta": false,
+          "live_event_dates": [
+            "created_date",
+            "COMMON_Event_Date",
+            "FCT_DT",
+            "event_timestamp"
+          ]
+        }
+      ],
+      "issues": [
+        "expected_date_INSTFCTDATE_missing",
+        "missing_column"
+      ]
+    },
+    {
+      "case": "E10",
+      "input": "Find customers whose total downloaded data volume in the last 30 days is above a given threshold.",
+      "expected_parent_condition": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(Data_Dwnload) ${operator} ${value}",
+      "request_measure": "volume",
+      "expected_metrics": [
+        {
+          "expected_column": "Data_Dwnload",
+          "in_kpi_meta": false,
+          "actual_name": null,
+          "value_type": null,
+          "description": null,
+          "inferred_measure": null,
+          "live_near_matches": []
+        }
+      ],
+      "expected_dates": [
+        {
+          "expected": "INSTFCTDATE",
+          "in_kpi_meta": false,
+          "live_event_dates": [
+            "created_date",
+            "COMMON_Event_Date",
+            "FCT_DT",
+            "event_timestamp"
+          ]
+        }
+      ],
+      "issues": [
+        "expected_date_INSTFCTDATE_missing",
+        "missing_column"
+      ]
+    },
+    {
+      "case": "E11",
+      "input": "Find customers whose average daily outgoing roaming voice revenue over the last 90 days is above a given threshold.",
+      "expected_parent_condition": "INSTFCTDATE >= CurrentTime-90DAYS AND INSTFCTDATE < CurrentTime AND SUM(V{AVG_DAILY_ROAM_VOICE_REV}=f{OG_Voice_Roaming_Revenue/90}) ${operator} ${value}",
+      "request_measure": "money",
+      "expected_metrics": [
+        {
+          "expected_column": "OG_Voice_Roaming_Revenue",
+          "in_kpi_meta": true,
+          "actual_name": "OG_Voice_Roaming_Revenue",
+          "value_type": "amount",
+          "description": "Revenue generated from outgoing voice calls made while the subscriber is in roaming",
+          "group_name": "Instant_cdr_group",
+          "inferred_measure": "money",
+          "case_insensitive_rename": false
+        }
+      ],
+      "expected_dates": [
+        {
+          "expected": "INSTFCTDATE",
+          "in_kpi_meta": false,
+          "live_event_dates": [
+            "created_date",
+            "COMMON_Event_Date",
+            "FCT_DT",
+            "event_timestamp"
+          ]
+        }
+      ],
+      "issues": [
+        "expected_date_INSTFCTDATE_missing"
+      ]
+    },
+    {
+      "case": "E12",
+      "input": "Find customers whose average daily outgoing roaming SMS revenue over the last 90 days is above a given threshold.",
+      "expected_parent_condition": "INSTFCTDATE >= CurrentTime-90DAYS AND INSTFCTDATE < CurrentTime AND SUM(V{AVG_DAILY_ROAM_SMS_REV}=f{OG_SMS_Roaming_Revenue/90}) ${operator} ${value}",
+      "request_measure": "money",
+      "expected_metrics": [
+        {
+          "expected_column": "OG_SMS_Roaming_Revenue",
+          "in_kpi_meta": true,
+          "actual_name": "OG_SMS_Roaming_Revenue",
+          "value_type": "amount",
+          "description": "Revenue generated from outgoing SMS sent while the subscriber is in roaming.",
+          "group_name": "Instant_cdr_group",
+          "inferred_measure": "money",
+          "case_insensitive_rename": false
+        }
+      ],
+      "expected_dates": [
+        {
+          "expected": "INSTFCTDATE",
+          "in_kpi_meta": false,
+          "live_event_dates": [
+            "created_date",
+            "COMMON_Event_Date",
+            "FCT_DT",
+            "event_timestamp"
+          ]
+        }
+      ],
+      "issues": [
+        "expected_date_INSTFCTDATE_missing"
+      ]
+    },
+    {
+      "case": "E13",
+      "input": "Find customers whose total voice revenue in the last 7 days is above a given threshold.",
+      "expected_parent_condition": "INSTFCTDATE >= CurrentTime-7DAYS AND INSTFCTDATE < CurrentTime AND SUM(Total_Voice_Revenue) ${operator} ${value}",
+      "request_measure": "money",
+      "expected_metrics": [
+        {
+          "expected_column": "Total_Voice_Revenue",
+          "in_kpi_meta": true,
+          "actual_name": "Total_Voice_Revenue",
+          "value_type": "amount",
+          "description": "Total revenue generated from voice call usage, including local, roaming, international, and out-of-bundle voice charges",
+          "group_name": "Instant_cdr_group",
+          "inferred_measure": "money",
+          "case_insensitive_rename": false
+        }
+      ],
+      "expected_dates": [
+        {
+          "expected": "INSTFCTDATE",
+          "in_kpi_meta": false,
+          "live_event_dates": [
+            "created_date",
+            "COMMON_Event_Date",
+            "FCT_DT",
+            "event_timestamp"
+          ]
+        }
+      ],
+      "issues": [
+        "expected_date_INSTFCTDATE_missing"
+      ]
+    },
+    {
+      "case": "E14",
+      "input": "Find customers whose total voice revenue in the last 30 days is above a given threshold.",
+      "expected_parent_condition": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(Total_Voice_Revenue) ${operator} ${value}",
+      "request_measure": "money",
+      "expected_metrics": [
+        {
+          "expected_column": "Total_Voice_Revenue",
+          "in_kpi_meta": true,
+          "actual_name": "Total_Voice_Revenue",
+          "value_type": "amount",
+          "description": "Total revenue generated from voice call usage, including local, roaming, international, and out-of-bundle voice charges",
+          "group_name": "Instant_cdr_group",
+          "inferred_measure": "money",
+          "case_insensitive_rename": false
+        }
+      ],
+      "expected_dates": [
+        {
+          "expected": "INSTFCTDATE",
+          "in_kpi_meta": false,
+          "live_event_dates": [
+            "created_date",
+            "COMMON_Event_Date",
+            "FCT_DT",
+            "event_timestamp"
+          ]
+        }
+      ],
+      "issues": [
+        "expected_date_INSTFCTDATE_missing"
+      ]
+    },
+    {
+      "case": "E15",
+      "input": "Find customers whose total outgoing on-net voice revenue in the last 30 days is above a given threshold.",
+      "expected_parent_condition": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(OG_Voice_Onnet_Revenue) ${operator} ${value}",
+      "request_measure": "money",
+      "expected_metrics": [
+        {
+          "expected_column": "OG_Voice_Onnet_Revenue",
+          "in_kpi_meta": true,
+          "actual_name": "OG_Voice_Onnet_Revenue",
+          "value_type": "amount",
+          "description": "Revenue generated from outgoing voice calls within the same telecom network.",
+          "group_name": "Instant_cdr_group",
+          "inferred_measure": "money",
+          "case_insensitive_rename": false
+        }
+      ],
+      "expected_dates": [
+        {
+          "expected": "INSTFCTDATE",
+          "in_kpi_meta": false,
+          "live_event_dates": [
+            "created_date",
+            "COMMON_Event_Date",
+            "FCT_DT",
+            "event_timestamp"
+          ]
+        }
+      ],
+      "issues": [
+        "expected_date_INSTFCTDATE_missing"
+      ]
+    },
+    {
+      "case": "E16",
+      "input": "Find customers whose total outgoing off-net voice revenue in the last 30 days is above a given threshold.",
+      "expected_parent_condition": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(OG_Voice_Offnet_Revenue) ${operator} ${value}",
+      "request_measure": "money",
+      "expected_metrics": [
+        {
+          "expected_column": "OG_Voice_Offnet_Revenue",
+          "in_kpi_meta": true,
+          "actual_name": "OG_Voice_Offnet_Revenue",
+          "value_type": "amount",
+          "description": "Revenue generated from outgoing voice calls made to other telecom operator networks",
+          "group_name": "Instant_cdr_group",
+          "inferred_measure": "money",
+          "case_insensitive_rename": false
+        }
+      ],
+      "expected_dates": [
+        {
+          "expected": "INSTFCTDATE",
+          "in_kpi_meta": false,
+          "live_event_dates": [
+            "created_date",
+            "COMMON_Event_Date",
+            "FCT_DT",
+            "event_timestamp"
+          ]
+        }
+      ],
+      "issues": [
+        "expected_date_INSTFCTDATE_missing"
+      ]
+    },
+    {
+      "case": "E17",
+      "input": "Find customers whose total outgoing IDD voice revenue in the last 30 days is above a given threshold.",
+      "expected_parent_condition": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(OG_Voice_Idd_Revenue) ${operator} ${value}",
+      "request_measure": "money",
+      "expected_metrics": [
+        {
+          "expected_column": "OG_Voice_Idd_Revenue",
+          "in_kpi_meta": true,
+          "actual_name": "OG_Voice_Idd_Revenue",
+          "value_type": "amount",
+          "description": "Revenue generated from outgoing international voice calls (IDD calls) made by the subscriber",
+          "group_name": "Instant_cdr_group",
+          "inferred_measure": "money",
+          "case_insensitive_rename": false
+        }
+      ],
+      "expected_dates": [
+        {
+          "expected": "INSTFCTDATE",
+          "in_kpi_meta": false,
+          "live_event_dates": [
+            "created_date",
+            "COMMON_Event_Date",
+            "FCT_DT",
+            "event_timestamp"
+          ]
+        }
+      ],
+      "issues": [
+        "expected_date_INSTFCTDATE_missing"
+      ]
+    },
+    {
+      "case": "E18",
+      "input": "Find customers whose total outgoing call count in the last 30 days is above a given threshold.",
+      "expected_parent_condition": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(OG_Total_Voice_count) ${operator} ${value}",
+      "request_measure": "count",
+      "expected_metrics": [
+        {
+          "expected_column": "OG_Total_Voice_count",
+          "in_kpi_meta": false,
+          "actual_name": null,
+          "value_type": null,
+          "description": null,
+          "inferred_measure": null,
+          "live_near_matches": []
+        }
+      ],
+      "expected_dates": [
+        {
+          "expected": "INSTFCTDATE",
+          "in_kpi_meta": false,
+          "live_event_dates": [
+            "created_date",
+            "COMMON_Event_Date",
+            "FCT_DT",
+            "event_timestamp"
+          ]
+        }
+      ],
+      "issues": [
+        "expected_date_INSTFCTDATE_missing",
+        "missing_column"
+      ]
+    },
+    {
+      "case": "E19",
+      "input": "Find customers whose total outgoing on-net call count in the last 30 days is above a given threshold.",
+      "expected_parent_condition": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(OG_Voice_Onnet_count) ${operator} ${value}",
+      "request_measure": "count",
+      "expected_metrics": [
+        {
+          "expected_column": "OG_Voice_Onnet_count",
+          "in_kpi_meta": false,
+          "actual_name": null,
+          "value_type": null,
+          "description": null,
+          "inferred_measure": null,
+          "live_near_matches": [
+            {
+              "name": "OG_Voice_Onnet_Revenue",
+              "value_type": "amount",
+              "description": "Revenue generated from outgoing voice calls within the same telecom network."
+            },
+            {
+              "name": "OG_Voice_Onnet_MOU",
+              "value_type": "volume",
+              "description": "Total outgoing voice minutes used for calls within the same operator\u2019s network."
+            },
+            {
+              "name": "CUST_360_VOICE_REVENUE_ONNET_FINANCE_REV_W8",
+              "value_type": "count",
+              "description": "Represents the total on-net voice revenue generated by the subscriber between 56 days ago and 50 day ago."
+            },
+            {
+              "name": "CUST_360_VOICE_REVENUE_ONNET_FINANCE_REV_W7",
+              "value_type": "count",
+              "description": "Represents the total on-net voice revenue generated by the subscriber between 49 days ago and 43 day ago."
+            },
+            {
+              "name": "CUST_360_VOICE_REVENUE_ONNET_FINANCE_REV_W6",
+              "value_type": "count",
+              "description": "Represents the total on-net voice revenue generated by the subscriber between 42 days ago and 36 day ago."
+            }
+          ]
+        }
+      ],
+      "expected_dates": [
+        {
+          "expected": "INSTFCTDATE",
+          "in_kpi_meta": false,
+          "live_event_dates": [
+            "created_date",
+            "COMMON_Event_Date",
+            "FCT_DT",
+            "event_timestamp"
+          ]
+        }
+      ],
+      "issues": [
+        "expected_date_INSTFCTDATE_missing",
+        "missing_column"
+      ]
+    },
+    {
+      "case": "E20",
+      "input": "Find customers whose total outgoing off-net call count in the last 30 days is above a given threshold.",
+      "expected_parent_condition": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(OG_Voice_Offnet_count) ${operator} ${value}",
+      "request_measure": "count",
+      "expected_metrics": [
+        {
+          "expected_column": "OG_Voice_Offnet_count",
+          "in_kpi_meta": false,
+          "actual_name": null,
+          "value_type": null,
+          "description": null,
+          "inferred_measure": null,
+          "live_near_matches": [
+            {
+              "name": "OG_Voice_Offnet_Revenue",
+              "value_type": "amount",
+              "description": "Revenue generated from outgoing voice calls made to other telecom operator networks"
+            },
+            {
+              "name": "OG_Voice_Offnet_MOU",
+              "value_type": "volume",
+              "description": "Total outgoing voice minutes used for calls made to other operators\u2019 networks"
+            },
+            {
+              "name": "CUST_360_VOICE_REVENUE_OFFNET_FINANCE_REV_W8",
+              "value_type": "count",
+              "description": "Represents the total off-net voice revenue generated by the subscriber between 56 days ago and 50 day ago."
+            },
+            {
+              "name": "CUST_360_VOICE_REVENUE_OFFNET_FINANCE_REV_W7",
+              "value_type": "count",
+              "description": "Represents the total off-net voice revenue generated by the subscriber between 49 days ago and 43 day ago."
+            },
+            {
+              "name": "CUST_360_VOICE_REVENUE_OFFNET_FINANCE_REV_W6",
+              "value_type": "count",
+              "description": "Represents the total off-net voice revenue generated by the subscriber between 42 days ago and 35 day ago."
+            }
+          ]
+        }
+      ],
+      "expected_dates": [
+        {
+          "expected": "INSTFCTDATE",
+          "in_kpi_meta": false,
+          "live_event_dates": [
+            "created_date",
+            "COMMON_Event_Date",
+            "FCT_DT",
+            "event_timestamp"
+          ]
+        }
+      ],
+      "issues": [
+        "expected_date_INSTFCTDATE_missing",
+        "missing_column"
+      ]
+    },
+    {
+      "case": "E21",
+      "input": "Find customers whose total outgoing IDD call count in the last 30 days is above a given threshold.",
+      "expected_parent_condition": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(OG_Voice_Idd_count) ${operator} ${value}",
+      "request_measure": "count",
+      "expected_metrics": [
+        {
+          "expected_column": "OG_Voice_Idd_count",
+          "in_kpi_meta": false,
+          "actual_name": null,
+          "value_type": null,
+          "description": null,
+          "inferred_measure": null,
+          "live_near_matches": [
+            {
+              "name": "OG_Voice_Idd_Revenue",
+              "value_type": "amount",
+              "description": "Revenue generated from outgoing international voice calls (IDD calls) made by the subscriber"
+            },
+            {
+              "name": "CUST_360_VOICE_REVENUE_IDD_FINANCE_REV_W8",
+              "value_type": "count",
+              "description": "Represents the total international direct dialing (IDD) voice revenue generated by the subscriber between 56 days ago and 50 day ago."
+            },
+            {
+              "name": "CUST_360_VOICE_REVENUE_IDD_FINANCE_REV_W7",
+              "value_type": "count",
+              "description": "Represents the total international direct dialing (IDD) voice revenue generated by the subscriber between 49 days ago and 43 day ago."
+            },
+            {
+              "name": "CUST_360_VOICE_REVENUE_IDD_FINANCE_REV_W6",
+              "value_type": "count",
+              "description": "Represents the total international direct dialing (IDD) voice revenue generated by the subscriber between 42 days ago and 36 day ago."
+            },
+            {
+              "name": "CUST_360_VOICE_REVENUE_IDD_FINANCE_REV_W5",
+              "value_type": "count",
+              "description": "Represents the total international direct dialing (IDD) voice revenue generated by the subscriber between 35 days ago and 29 day ago."
+            }
+          ]
+        }
+      ],
+      "expected_dates": [
+        {
+          "expected": "INSTFCTDATE",
+          "in_kpi_meta": false,
+          "live_event_dates": [
+            "created_date",
+            "COMMON_Event_Date",
+            "FCT_DT",
+            "event_timestamp"
+          ]
+        }
+      ],
+      "issues": [
+        "expected_date_INSTFCTDATE_missing",
+        "missing_column"
+      ]
+    },
+    {
+      "case": "E22",
+      "input": "Find customers whose total outgoing roaming call count in the last 30 days is above a given threshold.",
+      "expected_parent_condition": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(OG_Voice_Roaming_count) ${operator} ${value}",
+      "request_measure": "count",
+      "expected_metrics": [
+        {
+          "expected_column": "OG_Voice_Roaming_count",
+          "in_kpi_meta": false,
+          "actual_name": null,
+          "value_type": null,
+          "description": null,
+          "inferred_measure": null,
+          "live_near_matches": [
+            {
+              "name": "OG_Voice_Roaming_Revenue",
+              "value_type": "amount",
+              "description": "Revenue generated from outgoing voice calls made while the subscriber is in roaming"
+            },
+            {
+              "name": "CUST_360_VOICE_REVENUE_ROAMING_FINANCE_REV_W8",
+              "value_type": "count",
+              "description": "Represents the total roaming voice revenue generated by the subscriber between 56 days ago and 50 day ago."
+            },
+            {
+              "name": "CUST_360_VOICE_REVENUE_ROAMING_FINANCE_REV_W7",
+              "value_type": "count",
+              "description": "Represents the total roaming voice revenue generated by the subscriber between 49 days ago and 43 day ago."
+            },
+            {
+              "name": "CUST_360_VOICE_REVENUE_ROAMING_FINANCE_REV_W6",
+              "value_type": "count",
+              "description": "Represents the total roaming voice revenue generated by the subscriber between 42 days ago and 36 day ago."
+            },
+            {
+              "name": "CUST_360_VOICE_REVENUE_ROAMING_FINANCE_REV_W5",
+              "value_type": "count",
+              "description": "Represents the total roaming voice revenue generated by the subscriber between 35 days ago and 29 day ago."
+            }
+          ]
+        }
+      ],
+      "expected_dates": [
+        {
+          "expected": "INSTFCTDATE",
+          "in_kpi_meta": false,
+          "live_event_dates": [
+            "created_date",
+            "COMMON_Event_Date",
+            "FCT_DT",
+            "event_timestamp"
+          ]
+        }
+      ],
+      "issues": [
+        "expected_date_INSTFCTDATE_missing",
+        "missing_column"
+      ]
+    },
+    {
+      "case": "E23",
+      "input": "Find customers whose total outgoing roaming SMS count in the last 30 days is above a given threshold.",
+      "expected_parent_condition": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(OG_SMS_Roaming_count) ${operator} ${value}",
+      "request_measure": "count",
+      "expected_metrics": [
+        {
+          "expected_column": "OG_SMS_Roaming_count",
+          "in_kpi_meta": false,
+          "actual_name": null,
+          "value_type": null,
+          "description": null,
+          "inferred_measure": null,
+          "live_near_matches": [
+            {
+              "name": "OG_Total_SMS_count",
+              "value_type": "count",
+              "description": "Indicates the outgoing SMS event count. The value is 1 if the event type is SMS; otherwise 0"
+            },
+            {
+              "name": "OG_SMS_Roaming_Revenue",
+              "value_type": "amount",
+              "description": "Revenue generated from outgoing SMS sent while the subscriber is in roaming."
+            },
+            {
+              "name": "CUST_360_TOP_3RD_FAVORITE_ROAMING_COUNTRIES_IN_MTD",
+              "value_type": "text",
+              "description": "3rd most visited roaming country in the current month starting to current date (MTD)."
+            },
+            {
+              "name": "CUST_360_TOP_3RD_FAVORITE_ROAMING_COUNTRIES_IN_M2",
+              "value_type": "text",
+              "description": "3rd most visited roaming country two months ago."
+            },
+            {
+              "name": "CUST_360_TOP_3RD_FAVORITE_ROAMING_COUNTRIES_IN_M1",
+              "value_type": "text",
+              "description": "3rd most visited roaming country in the previous month based on roaming usage."
+            }
+          ]
+        }
+      ],
+      "expected_dates": [
+        {
+          "expected": "INSTFCTDATE",
+          "in_kpi_meta": false,
+          "live_event_dates": [
+            "created_date",
+            "COMMON_Event_Date",
+            "FCT_DT",
+            "event_timestamp"
+          ]
+        }
+      ],
+      "issues": [
+        "expected_date_INSTFCTDATE_missing",
+        "missing_column"
+      ]
+    },
+    {
+      "case": "E24",
+      "input": "Find customers whose total outgoing call minutes in the last 30 days is above a given threshold.",
+      "expected_parent_condition": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(OG_Total_Voice_MOU) ${operator} ${value}",
+      "request_measure": "other",
+      "expected_metrics": [
+        {
+          "expected_column": "OG_Total_Voice_MOU",
+          "in_kpi_meta": true,
+          "actual_name": "OG_Total_Voice_MOU",
+          "value_type": "volume",
+          "description": "Total outgoing voice minutes of usage (MOU) generated by the subscriber.",
+          "group_name": "Instant_cdr_group",
+          "inferred_measure": "volume",
+          "case_insensitive_rename": false
+        }
+      ],
+      "expected_dates": [
+        {
+          "expected": "INSTFCTDATE",
+          "in_kpi_meta": false,
+          "live_event_dates": [
+            "created_date",
+            "COMMON_Event_Date",
+            "FCT_DT",
+            "event_timestamp"
+          ]
+        }
+      ],
+      "issues": [
+        "expected_date_INSTFCTDATE_missing"
+      ]
+    },
+    {
+      "case": "E25",
+      "input": "Find customers whose total outgoing on-net call minutes in the last 30 days is above a given threshold.",
+      "expected_parent_condition": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(OG_Voice_Onnet_MOU) ${operator} ${value}",
+      "request_measure": "other",
+      "expected_metrics": [
+        {
+          "expected_column": "OG_Voice_Onnet_MOU",
+          "in_kpi_meta": true,
+          "actual_name": "OG_Voice_Onnet_MOU",
+          "value_type": "volume",
+          "description": "Total outgoing voice minutes used for calls within the same operator\u2019s network.",
+          "group_name": "Instant_cdr_group",
+          "inferred_measure": "volume",
+          "case_insensitive_rename": false
+        }
+      ],
+      "expected_dates": [
+        {
+          "expected": "INSTFCTDATE",
+          "in_kpi_meta": false,
+          "live_event_dates": [
+            "created_date",
+            "COMMON_Event_Date",
+            "FCT_DT",
+            "event_timestamp"
+          ]
+        }
+      ],
+      "issues": [
+        "expected_date_INSTFCTDATE_missing"
+      ]
+    },
+    {
+      "case": "E26",
+      "input": "Find customers whose total outgoing off-net call minutes in the last 30 days is above a given threshold.",
+      "expected_parent_condition": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(OG_Voice_Offnet_MOU) ${operator} ${value}",
+      "request_measure": "other",
+      "expected_metrics": [
+        {
+          "expected_column": "OG_Voice_Offnet_MOU",
+          "in_kpi_meta": true,
+          "actual_name": "OG_Voice_Offnet_MOU",
+          "value_type": "volume",
+          "description": "Total outgoing voice minutes used for calls made to other operators\u2019 networks",
+          "group_name": "Instant_cdr_group",
+          "inferred_measure": "volume",
+          "case_insensitive_rename": false
+        }
+      ],
+      "expected_dates": [
+        {
+          "expected": "INSTFCTDATE",
+          "in_kpi_meta": false,
+          "live_event_dates": [
+            "created_date",
+            "COMMON_Event_Date",
+            "FCT_DT",
+            "event_timestamp"
+          ]
+        }
+      ],
+      "issues": [
+        "expected_date_INSTFCTDATE_missing"
+      ]
+    },
+    {
+      "case": "E27",
+      "input": "Find customers whose total outgoing IDD call minutes in the last 30 days is above a given threshold.",
+      "expected_parent_condition": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(OG_Voice_Idd_MOU) ${operator} ${value}",
+      "request_measure": "other",
+      "expected_metrics": [
+        {
+          "expected_column": "OG_Voice_Idd_MOU",
+          "in_kpi_meta": false,
+          "actual_name": null,
+          "value_type": null,
+          "description": null,
+          "inferred_measure": null,
+          "live_near_matches": [
+            {
+              "name": "CUST_360_IDD_VOICE_MOU_MTD",
+              "value_type": "volume",
+              "description": "Represents the total IDD voice revenue generated Month-to-Date (MTD), calculated from the first day of the current month up to the previous day."
+            },
+            {
+              "name": "CUST_360_IDD_VOICE_MOU_LMTD",
+              "value_type": "volume",
+              "description": "Represents the total IDD voice revenue generated during the same period of the previous month (Last Month-to-Date)."
+            },
+            {
+              "name": "CUST_360_IDD_VOICE_MOU_90D",
+              "value_type": "volume",
+              "description": "Represents the total outgoing IDD voice usage in minutes during the last 90 days excluding the current day, calculated by summing outgoing IDD call Minutes Of Usage."
+            },
+            {
+              "name": "CUST_360_IDD_VOICE_MOU_60D",
+              "value_type": "volume",
+              "description": "Represents the total outgoing IDD voice usage in minutes during the last 60 days excluding the current day."
+            },
+            {
+              "name": "CUST_360_IDD_VOICE_MOU_30D",
+              "value_type": "volume",
+              "description": "Represents the total outgoing IDD voice usage in Minutes of Usage (MoU) during the last 30 days excluding the current day."
+            }
+          ]
+        }
+      ],
+      "expected_dates": [
+        {
+          "expected": "INSTFCTDATE",
+          "in_kpi_meta": false,
+          "live_event_dates": [
+            "created_date",
+            "COMMON_Event_Date",
+            "FCT_DT",
+            "event_timestamp"
+          ]
+        }
+      ],
+      "issues": [
+        "expected_date_INSTFCTDATE_missing",
+        "missing_column"
+      ]
+    },
+    {
+      "case": "E28",
+      "input": "Find customers whose total outgoing roaming call minutes in the last 30 days is above a given threshold.",
+      "expected_parent_condition": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(OG_Voice_Roaming_MOU) ${operator} ${value}",
+      "request_measure": "other",
+      "expected_metrics": [
+        {
+          "expected_column": "OG_Voice_Roaming_MOU",
+          "in_kpi_meta": false,
+          "actual_name": null,
+          "value_type": null,
+          "description": null,
+          "inferred_measure": null,
+          "live_near_matches": [
+            {
+              "name": "CUST_360_ROAMING_VOICE_OUT_MOUS_90D",
+              "value_type": "volume",
+              "description": "Total outgoing roaming voice minutes in the last 90 days."
+            },
+            {
+              "name": "CUST_360_ROAMING_VOICE_OUT_MOUS_60D",
+              "value_type": "volume",
+              "description": "Total outgoing roaming voice minutes in the last 60 days."
+            },
+            {
+              "name": "CUST_360_ROAMING_VOICE_OUT_MOUS_30D",
+              "value_type": "volume",
+              "description": "Total outgoing roaming voice call minutes in the last 30 days."
+            },
+            {
+              "name": "CUST_360_ROAMING_VOICE_IN_MOUS_90D",
+              "value_type": "volume",
+              "description": "Total incoming roaming voice minutes in the last 90 days."
+            },
+            {
+              "name": "CUST_360_ROAMING_VOICE_IN_MOUS_60D",
+              "value_type": "volume",
+              "description": "Total incoming roaming voice minutes in the last 60 days."
+            }
+          ]
+        }
+      ],
+      "expected_dates": [
+        {
+          "expected": "INSTFCTDATE",
+          "in_kpi_meta": false,
+          "live_event_dates": [
+            "created_date",
+            "COMMON_Event_Date",
+            "FCT_DT",
+            "event_timestamp"
+          ]
+        }
+      ],
+      "issues": [
+        "expected_date_INSTFCTDATE_missing",
+        "missing_column"
+      ]
+    },
+    {
+      "case": "E29",
+      "input": "Find customers whose total data usage in the last 30 days is above a given threshold.",
+      "expected_parent_condition": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(Total_Data_Usage) ${operator} ${value}",
+      "request_measure": "volume",
+      "expected_metrics": [
+        {
+          "expected_column": "Total_Data_Usage",
+          "in_kpi_meta": true,
+          "actual_name": "Total_Data_usage",
+          "value_type": "volume",
+          "description": "Total volume of mobile data consumed by the subscriber",
+          "group_name": "Instant_cdr_group",
+          "inferred_measure": "volume",
+          "case_insensitive_rename": true
+        }
+      ],
+      "expected_dates": [
+        {
+          "expected": "INSTFCTDATE",
+          "in_kpi_meta": false,
+          "live_event_dates": [
+            "created_date",
+            "COMMON_Event_Date",
+            "FCT_DT",
+            "event_timestamp"
+          ]
+        }
+      ],
+      "issues": [
+        "case_differs",
+        "expected_date_INSTFCTDATE_missing"
+      ]
+    },
+    {
+      "case": "E30",
+      "input": "Find customers whose total outgoing on-net SMS revenue in the last 30 days is above a given threshold.",
+      "expected_parent_condition": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(OG_SMS_Onnet_Revenue) ${operator} ${value}",
+      "request_measure": "money",
+      "expected_metrics": [
+        {
+          "expected_column": "OG_SMS_Onnet_Revenue",
+          "in_kpi_meta": true,
+          "actual_name": "OG_SMS_Onnet_Revenue",
+          "value_type": "amount",
+          "description": "Revenue generated from outgoing SMS sent within the same operator\u2019s network.",
+          "group_name": "Instant_cdr_group",
+          "inferred_measure": "money",
+          "case_insensitive_rename": false
+        }
+      ],
+      "expected_dates": [
+        {
+          "expected": "INSTFCTDATE",
+          "in_kpi_meta": false,
+          "live_event_dates": [
+            "created_date",
+            "COMMON_Event_Date",
+            "FCT_DT",
+            "event_timestamp"
+          ]
+        }
+      ],
+      "issues": [
+        "expected_date_INSTFCTDATE_missing"
+      ]
+    },
+    {
+      "case": "E31",
+      "input": "Find customers whose total outgoing off-net SMS revenue in the last 30 days is above a given threshold.",
+      "expected_parent_condition": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(OG_SMS_Offnet_Revenue) ${operator} ${value}",
+      "request_measure": "money",
+      "expected_metrics": [
+        {
+          "expected_column": "OG_SMS_Offnet_Revenue",
+          "in_kpi_meta": true,
+          "actual_name": "OG_SMS_Offnet_Revenue",
+          "value_type": "amount",
+          "description": "Revenue generated from outgoing SMS sent to subscribers of other telecom operators.",
+          "group_name": "Instant_cdr_group",
+          "inferred_measure": "money",
+          "case_insensitive_rename": false
+        }
+      ],
+      "expected_dates": [
+        {
+          "expected": "INSTFCTDATE",
+          "in_kpi_meta": false,
+          "live_event_dates": [
+            "created_date",
+            "COMMON_Event_Date",
+            "FCT_DT",
+            "event_timestamp"
+          ]
+        }
+      ],
+      "issues": [
+        "expected_date_INSTFCTDATE_missing"
+      ]
+    },
+    {
+      "case": "E32",
+      "input": "Find customers whose total outgoing IDD SMS revenue in the last 30 days is above a given threshold.",
+      "expected_parent_condition": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(OG_SMS_Idd_Revenue) ${operator} ${value}",
+      "request_measure": "money",
+      "expected_metrics": [
+        {
+          "expected_column": "OG_SMS_Idd_Revenue",
+          "in_kpi_meta": true,
+          "actual_name": "OG_SMS_Idd_Revenue",
+          "value_type": "amount",
+          "description": "Revenue generated from outgoing international SMS sent by the subscriber",
+          "group_name": "Instant_cdr_group",
+          "inferred_measure": "money",
+          "case_insensitive_rename": false
+        }
+      ],
+      "expected_dates": [
+        {
+          "expected": "INSTFCTDATE",
+          "in_kpi_meta": false,
+          "live_event_dates": [
+            "created_date",
+            "COMMON_Event_Date",
+            "FCT_DT",
+            "event_timestamp"
+          ]
+        }
+      ],
+      "issues": [
+        "expected_date_INSTFCTDATE_missing"
+      ]
+    },
+    {
+      "case": "E33",
+      "input": "Find customers whose total total revenue yesterday is above a given threshold.",
+      "expected_parent_condition": "INSTFCTDATE = CurrentTime-1DAYS AND SUM(Total_Revenue) ${operator} ${value}",
+      "request_measure": "money",
+      "expected_metrics": [
+        {
+          "expected_column": "Total_Revenue",
+          "in_kpi_meta": true,
+          "actual_name": "Total_Revenue",
+          "value_type": "amount",
+          "description": "Total revenue generated from all subscriber activities, including voice, sms, data, recharge, and other chargeable events",
+          "group_name": "Instant_cdr_group",
+          "inferred_measure": "money",
+          "case_insensitive_rename": false
+        }
+      ],
+      "expected_dates": [
+        {
+          "expected": "INSTFCTDATE",
+          "in_kpi_meta": false,
+          "live_event_dates": [
+            "created_date",
+            "COMMON_Event_Date",
+            "FCT_DT",
+            "event_timestamp"
+          ]
+        }
+      ],
+      "issues": [
+        "expected_date_INSTFCTDATE_missing"
+      ]
+    },
+    {
+      "case": "E34",
+      "input": "Find customers whose total total revenue in the last 30 days is above a given threshold.",
+      "expected_parent_condition": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(Total_Revenue) ${operator} ${value}",
+      "request_measure": "money",
+      "expected_metrics": [
+        {
+          "expected_column": "Total_Revenue",
+          "in_kpi_meta": true,
+          "actual_name": "Total_Revenue",
+          "value_type": "amount",
+          "description": "Total revenue generated from all subscriber activities, including voice, sms, data, recharge, and other chargeable events",
+          "group_name": "Instant_cdr_group",
+          "inferred_measure": "money",
+          "case_insensitive_rename": false
+        }
+      ],
+      "expected_dates": [
+        {
+          "expected": "INSTFCTDATE",
+          "in_kpi_meta": false,
+          "live_event_dates": [
+            "created_date",
+            "COMMON_Event_Date",
+            "FCT_DT",
+            "event_timestamp"
+          ]
+        }
+      ],
+      "issues": [
+        "expected_date_INSTFCTDATE_missing"
+      ]
+    },
+    {
+      "case": "E35",
+      "input": "Find customers whose total total revenue this month is above a given threshold.",
+      "expected_parent_condition": "INSTFCTDATE = CurrentMonth AND SUM(Total_Revenue) ${operator} ${value}",
+      "request_measure": "money",
+      "expected_metrics": [
+        {
+          "expected_column": "Total_Revenue",
+          "in_kpi_meta": true,
+          "actual_name": "Total_Revenue",
+          "value_type": "amount",
+          "description": "Total revenue generated from all subscriber activities, including voice, sms, data, recharge, and other chargeable events",
+          "group_name": "Instant_cdr_group",
+          "inferred_measure": "money",
+          "case_insensitive_rename": false
+        }
+      ],
+      "expected_dates": [
+        {
+          "expected": "INSTFCTDATE",
+          "in_kpi_meta": false,
+          "live_event_dates": [
+            "created_date",
+            "COMMON_Event_Date",
+            "FCT_DT",
+            "event_timestamp"
+          ]
+        }
+      ],
+      "issues": [
+        "expected_date_INSTFCTDATE_missing"
+      ]
+    },
+    {
+      "case": "E36",
+      "input": "Find customers whose total data roaming usage in the last 30 days is above a given threshold.",
+      "expected_parent_condition": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(Data_Roaming_Usage) ${operator} ${value}",
+      "request_measure": "volume",
+      "expected_metrics": [
+        {
+          "expected_column": "Data_Roaming_Usage",
+          "in_kpi_meta": false,
+          "actual_name": null,
+          "value_type": null,
+          "description": null,
+          "inferred_measure": null,
+          "live_near_matches": [
+            {
+              "name": "Total_Data_usage",
+              "value_type": "volume",
+              "description": "Total volume of mobile data consumed by the subscriber"
+            },
+            {
+              "name": "CUST_360_FAVOURITE_HOUR_DATA_USAGE_MTD",
+              "value_type": "count",
+              "description": ""
+            },
+            {
+              "name": "CUST_360_FAVOURITE_HOUR_DATA_USAGE_M2",
+              "value_type": "count",
+              "description": ""
+            },
+            {
+              "name": "CUST_360_FAVOURITE_HOUR_DATA_USAGE_M1",
+              "value_type": "count",
+              "description": ""
+            },
+            {
+              "name": "CUST_360_DATA_REVENUE_ROAMING_FINANCE_REV_W8",
+              "value_type": "count",
+              "description": "Represents the total roaming data revenue generated by the subscriber between 56 days ago and 50 day ago."
+            }
+          ]
+        }
+      ],
+      "expected_dates": [
+        {
+          "expected": "INSTFCTDATE",
+          "in_kpi_meta": false,
+          "live_event_dates": [
+            "created_date",
+            "COMMON_Event_Date",
+            "FCT_DT",
+            "event_timestamp"
+          ]
+        }
+      ],
+      "issues": [
+        "expected_date_INSTFCTDATE_missing",
+        "missing_column"
+      ]
+    },
+    {
+      "case": "E37",
+      "input": "Find customers whose total recharge count in the last 30 days is above a given threshold.",
+      "expected_parent_condition": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(Recharge_count) ${operator} ${value}",
+      "request_measure": "count",
+      "expected_metrics": [
+        {
+          "expected_column": "Recharge_count",
+          "in_kpi_meta": true,
+          "actual_name": "Recharge_count",
+          "value_type": "count",
+          "description": "Indicates the recharge event count. The value is 1 if the event is a recharge; otherwise 0",
+          "group_name": "Instant_cdr_group",
+          "inferred_measure": "count",
+          "case_insensitive_rename": false
+        }
+      ],
+      "expected_dates": [
+        {
+          "expected": "INSTFCTDATE",
+          "in_kpi_meta": false,
+          "live_event_dates": [
+            "created_date",
+            "COMMON_Event_Date",
+            "FCT_DT",
+            "event_timestamp"
+          ]
+        }
+      ],
+      "issues": [
+        "expected_date_INSTFCTDATE_missing"
+      ]
+    },
+    {
+      "case": "E38",
+      "input": "Find customers whose total recharge count last month is above a given threshold.",
+      "expected_parent_condition": "INSTFCTDATE = CurrentMonth-1MONTHS AND SUM(Recharge_count) ${operator} ${value}",
+      "request_measure": "count",
+      "expected_metrics": [
+        {
+          "expected_column": "Recharge_count",
+          "in_kpi_meta": true,
+          "actual_name": "Recharge_count",
+          "value_type": "count",
+          "description": "Indicates the recharge event count. The value is 1 if the event is a recharge; otherwise 0",
+          "group_name": "Instant_cdr_group",
+          "inferred_measure": "count",
+          "case_insensitive_rename": false
+        }
+      ],
+      "expected_dates": [
+        {
+          "expected": "INSTFCTDATE",
+          "in_kpi_meta": false,
+          "live_event_dates": [
+            "created_date",
+            "COMMON_Event_Date",
+            "FCT_DT",
+            "event_timestamp"
+          ]
+        }
+      ],
+      "issues": [
+        "expected_date_INSTFCTDATE_missing"
+      ]
+    },
+    {
+      "case": "E39",
+      "input": "Find customers whose average weekly recharge amount over the last 4 weeks is above a given threshold.",
+      "expected_parent_condition": "INSTFCTDATE >= CurrentWeek-4WEEKS AND INSTFCTDATE < CurrentWeek AND SUM(V{AVG_WEEKLY_RECHARGE_REV}=f{Recharge_revenue/4}) ${operator} ${value}",
+      "request_measure": "mixed/check",
+      "expected_metrics": [
+        {
+          "expected_column": "Recharge_revenue",
+          "in_kpi_meta": true,
+          "actual_name": "Recharge_revenue",
+          "value_type": "amount",
+          "description": "The revenue generated from subscriber recharge transactions",
+          "group_name": "Instant_cdr_group",
+          "inferred_measure": "money",
+          "case_insensitive_rename": false
+        }
+      ],
+      "expected_dates": [
+        {
+          "expected": "INSTFCTDATE",
+          "in_kpi_meta": false,
+          "live_event_dates": [
+            "created_date",
+            "COMMON_Event_Date",
+            "FCT_DT",
+            "event_timestamp"
+          ]
+        }
+      ],
+      "issues": [
+        "expected_date_INSTFCTDATE_missing"
+      ]
+    },
+    {
+      "case": "E40",
+      "input": "Find customers whose average monthly recharge amount over the last 3 months is above a given threshold.",
+      "expected_parent_condition": "INSTFCTDATE >= CurrentMonth-3MONTHS AND INSTFCTDATE < CurrentMonth AND SUM(V{AVG_MONTHLY_RECHARGE_REV}=f{Recharge_revenue/3}) ${operator} ${value}",
+      "request_measure": "mixed/check",
+      "expected_metrics": [
+        {
+          "expected_column": "Recharge_revenue",
+          "in_kpi_meta": true,
+          "actual_name": "Recharge_revenue",
+          "value_type": "amount",
+          "description": "The revenue generated from subscriber recharge transactions",
+          "group_name": "Instant_cdr_group",
+          "inferred_measure": "money",
+          "case_insensitive_rename": false
+        }
+      ],
+      "expected_dates": [
+        {
+          "expected": "INSTFCTDATE",
+          "in_kpi_meta": false,
+          "live_event_dates": [
+            "created_date",
+            "COMMON_Event_Date",
+            "FCT_DT",
+            "event_timestamp"
+          ]
+        }
+      ],
+      "issues": [
+        "expected_date_INSTFCTDATE_missing"
+      ]
+    },
+    {
+      "case": "E41",
+      "input": "Find customers whose total recharge amount last week is above a given threshold.",
+      "expected_parent_condition": "INSTFCTDATE = CurrentWeek-1WEEKS AND SUM(Recharge_revenue) ${operator} ${value}",
+      "request_measure": "mixed/check",
+      "expected_metrics": [
+        {
+          "expected_column": "Recharge_revenue",
+          "in_kpi_meta": true,
+          "actual_name": "Recharge_revenue",
+          "value_type": "amount",
+          "description": "The revenue generated from subscriber recharge transactions",
+          "group_name": "Instant_cdr_group",
+          "inferred_measure": "money",
+          "case_insensitive_rename": false
+        }
+      ],
+      "expected_dates": [
+        {
+          "expected": "INSTFCTDATE",
+          "in_kpi_meta": false,
+          "live_event_dates": [
+            "created_date",
+            "COMMON_Event_Date",
+            "FCT_DT",
+            "event_timestamp"
+          ]
+        }
+      ],
+      "issues": [
+        "expected_date_INSTFCTDATE_missing"
+      ]
+    },
+    {
+      "case": "E42",
+      "input": "Find customers whose total recharge amount in the last 14 days is above a given threshold.",
+      "expected_parent_condition": "INSTFCTDATE >= CurrentTime-14DAYS AND INSTFCTDATE < CurrentTime AND SUM(Recharge_revenue) ${operator} ${value}",
+      "request_measure": "mixed/check",
+      "expected_metrics": [
+        {
+          "expected_column": "Recharge_revenue",
+          "in_kpi_meta": true,
+          "actual_name": "Recharge_revenue",
+          "value_type": "amount",
+          "description": "The revenue generated from subscriber recharge transactions",
+          "group_name": "Instant_cdr_group",
+          "inferred_measure": "money",
+          "case_insensitive_rename": false
+        }
+      ],
+      "expected_dates": [
+        {
+          "expected": "INSTFCTDATE",
+          "in_kpi_meta": false,
+          "live_event_dates": [
+            "created_date",
+            "COMMON_Event_Date",
+            "FCT_DT",
+            "event_timestamp"
+          ]
+        }
+      ],
+      "issues": [
+        "expected_date_INSTFCTDATE_missing"
+      ]
+    },
+    {
+      "case": "E43",
+      "input": "Find customers whose total recharge amount in the last 30 days is above a given threshold.",
+      "expected_parent_condition": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(Recharge_revenue) ${operator} ${value}",
+      "request_measure": "mixed/check",
+      "expected_metrics": [
+        {
+          "expected_column": "Recharge_revenue",
+          "in_kpi_meta": true,
+          "actual_name": "Recharge_revenue",
+          "value_type": "amount",
+          "description": "The revenue generated from subscriber recharge transactions",
+          "group_name": "Instant_cdr_group",
+          "inferred_measure": "money",
+          "case_insensitive_rename": false
+        }
+      ],
+      "expected_dates": [
+        {
+          "expected": "INSTFCTDATE",
+          "in_kpi_meta": false,
+          "live_event_dates": [
+            "created_date",
+            "COMMON_Event_Date",
+            "FCT_DT",
+            "event_timestamp"
+          ]
+        }
+      ],
+      "issues": [
+        "expected_date_INSTFCTDATE_missing"
+      ]
+    },
+    {
+      "case": "E44",
+      "input": "Find customers whose highest single recharge amount last week is above a given threshold.",
+      "expected_parent_condition": "INSTFCTDATE = CurrentWeek-1WEEKS AND Max(Recharge_revenue) ${operator} ${value}",
+      "request_measure": "mixed/check",
+      "expected_metrics": [
+        {
+          "expected_column": "Recharge_revenue",
+          "in_kpi_meta": true,
+          "actual_name": "Recharge_revenue",
+          "value_type": "amount",
+          "description": "The revenue generated from subscriber recharge transactions",
+          "group_name": "Instant_cdr_group",
+          "inferred_measure": "money",
+          "case_insensitive_rename": false
+        }
+      ],
+      "expected_dates": [
+        {
+          "expected": "INSTFCTDATE",
+          "in_kpi_meta": false,
+          "live_event_dates": [
+            "created_date",
+            "COMMON_Event_Date",
+            "FCT_DT",
+            "event_timestamp"
+          ]
+        }
+      ],
+      "issues": [
+        "expected_date_INSTFCTDATE_missing"
+      ]
+    },
+    {
+      "case": "E45",
+      "input": "Find customers whose highest single recharge amount in the last 7 days is above a given threshold.",
+      "expected_parent_condition": "INSTFCTDATE >= CurrentTime-7DAYS AND INSTFCTDATE < CurrentTime AND Max(Recharge_revenue) ${operator} ${value}",
+      "request_measure": "mixed/check",
+      "expected_metrics": [
+        {
+          "expected_column": "Recharge_revenue",
+          "in_kpi_meta": true,
+          "actual_name": "Recharge_revenue",
+          "value_type": "amount",
+          "description": "The revenue generated from subscriber recharge transactions",
+          "group_name": "Instant_cdr_group",
+          "inferred_measure": "money",
+          "case_insensitive_rename": false
+        }
+      ],
+      "expected_dates": [
+        {
+          "expected": "INSTFCTDATE",
+          "in_kpi_meta": false,
+          "live_event_dates": [
+            "created_date",
+            "COMMON_Event_Date",
+            "FCT_DT",
+            "event_timestamp"
+          ]
+        }
+      ],
+      "issues": [
+        "expected_date_INSTFCTDATE_missing"
+      ]
+    },
+    {
+      "case": "E46",
+      "input": "Find customers whose highest single recharge amount in the last 14 days is above a given threshold.",
+      "expected_parent_condition": "INSTFCTDATE >= CurrentTime-14DAYS AND INSTFCTDATE < CurrentTime AND Max(Recharge_revenue) ${operator} ${value}",
+      "request_measure": "mixed/check",
+      "expected_metrics": [
+        {
+          "expected_column": "Recharge_revenue",
+          "in_kpi_meta": true,
+          "actual_name": "Recharge_revenue",
+          "value_type": "amount",
+          "description": "The revenue generated from subscriber recharge transactions",
+          "group_name": "Instant_cdr_group",
+          "inferred_measure": "money",
+          "case_insensitive_rename": false
+        }
+      ],
+      "expected_dates": [
+        {
+          "expected": "INSTFCTDATE",
+          "in_kpi_meta": false,
+          "live_event_dates": [
+            "created_date",
+            "COMMON_Event_Date",
+            "FCT_DT",
+            "event_timestamp"
+          ]
+        }
+      ],
+      "issues": [
+        "expected_date_INSTFCTDATE_missing"
+      ]
+    },
+    {
+      "case": "E47",
+      "input": "Find customers whose highest single recharge amount in the last 30 days is above a given threshold.",
+      "expected_parent_condition": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND Max(Recharge_revenue) ${operator} ${value}",
+      "request_measure": "mixed/check",
+      "expected_metrics": [
+        {
+          "expected_column": "Recharge_revenue",
+          "in_kpi_meta": true,
+          "actual_name": "Recharge_revenue",
+          "value_type": "amount",
+          "description": "The revenue generated from subscriber recharge transactions",
+          "group_name": "Instant_cdr_group",
+          "inferred_measure": "money",
+          "case_insensitive_rename": false
+        }
+      ],
+      "expected_dates": [
+        {
+          "expected": "INSTFCTDATE",
+          "in_kpi_meta": false,
+          "live_event_dates": [
+            "created_date",
+            "COMMON_Event_Date",
+            "FCT_DT",
+            "event_timestamp"
+          ]
+        }
+      ],
+      "issues": [
+        "expected_date_INSTFCTDATE_missing"
+      ]
+    },
+    {
+      "case": "E48",
+      "input": "Find customers whose highest single recharge amount last month is above a given threshold.",
+      "expected_parent_condition": "INSTFCTDATE = CurrentMonth-1MONTHS AND Max(Recharge_revenue) ${operator} ${value}",
+      "request_measure": "mixed/check",
+      "expected_metrics": [
+        {
+          "expected_column": "Recharge_revenue",
+          "in_kpi_meta": true,
+          "actual_name": "Recharge_revenue",
+          "value_type": "amount",
+          "description": "The revenue generated from subscriber recharge transactions",
+          "group_name": "Instant_cdr_group",
+          "inferred_measure": "money",
+          "case_insensitive_rename": false
+        }
+      ],
+      "expected_dates": [
+        {
+          "expected": "INSTFCTDATE",
+          "in_kpi_meta": false,
+          "live_event_dates": [
+            "created_date",
+            "COMMON_Event_Date",
+            "FCT_DT",
+            "event_timestamp"
+          ]
+        }
+      ],
+      "issues": [
+        "expected_date_INSTFCTDATE_missing"
+      ]
+    },
+    {
+      "case": "E49",
+      "input": "Find customers whose lowest single recharge amount last week is above a given threshold.",
+      "expected_parent_condition": "INSTFCTDATE = CurrentWeek-1WEEKS AND Min(Recharge_revenue) ${operator} ${value}",
+      "request_measure": "mixed/check",
+      "expected_metrics": [
+        {
+          "expected_column": "Recharge_revenue",
+          "in_kpi_meta": true,
+          "actual_name": "Recharge_revenue",
+          "value_type": "amount",
+          "description": "The revenue generated from subscriber recharge transactions",
+          "group_name": "Instant_cdr_group",
+          "inferred_measure": "money",
+          "case_insensitive_rename": false
+        }
+      ],
+      "expected_dates": [
+        {
+          "expected": "INSTFCTDATE",
+          "in_kpi_meta": false,
+          "live_event_dates": [
+            "created_date",
+            "COMMON_Event_Date",
+            "FCT_DT",
+            "event_timestamp"
+          ]
+        }
+      ],
+      "issues": [
+        "expected_date_INSTFCTDATE_missing"
+      ]
+    },
+    {
+      "case": "E50",
+      "input": "Find customers whose lowest single recharge amount in the last 7 days is above a given threshold.",
+      "expected_parent_condition": "INSTFCTDATE >= CurrentTime-7DAYS AND INSTFCTDATE < CurrentTime AND Min(Recharge_revenue) ${operator} ${value}",
+      "request_measure": "mixed/check",
+      "expected_metrics": [
+        {
+          "expected_column": "Recharge_revenue",
+          "in_kpi_meta": true,
+          "actual_name": "Recharge_revenue",
+          "value_type": "amount",
+          "description": "The revenue generated from subscriber recharge transactions",
+          "group_name": "Instant_cdr_group",
+          "inferred_measure": "money",
+          "case_insensitive_rename": false
+        }
+      ],
+      "expected_dates": [
+        {
+          "expected": "INSTFCTDATE",
+          "in_kpi_meta": false,
+          "live_event_dates": [
+            "created_date",
+            "COMMON_Event_Date",
+            "FCT_DT",
+            "event_timestamp"
+          ]
+        }
+      ],
+      "issues": [
+        "expected_date_INSTFCTDATE_missing"
+      ]
+    },
+    {
+      "case": "E51",
+      "input": "Find customers whose lowest single recharge amount in the last 14 days is above a given threshold.",
+      "expected_parent_condition": "INSTFCTDATE >= CurrentTime-14DAYS AND INSTFCTDATE < CurrentTime AND Min(Recharge_revenue) ${operator} ${value}",
+      "request_measure": "mixed/check",
+      "expected_metrics": [
+        {
+          "expected_column": "Recharge_revenue",
+          "in_kpi_meta": true,
+          "actual_name": "Recharge_revenue",
+          "value_type": "amount",
+          "description": "The revenue generated from subscriber recharge transactions",
+          "group_name": "Instant_cdr_group",
+          "inferred_measure": "money",
+          "case_insensitive_rename": false
+        }
+      ],
+      "expected_dates": [
+        {
+          "expected": "INSTFCTDATE",
+          "in_kpi_meta": false,
+          "live_event_dates": [
+            "created_date",
+            "COMMON_Event_Date",
+            "FCT_DT",
+            "event_timestamp"
+          ]
+        }
+      ],
+      "issues": [
+        "expected_date_INSTFCTDATE_missing"
+      ]
+    },
+    {
+      "case": "E52",
+      "input": "Find customers whose lowest single recharge amount in the last 30 days is above a given threshold.",
+      "expected_parent_condition": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND Min(Recharge_revenue) ${operator} ${value}",
+      "request_measure": "mixed/check",
+      "expected_metrics": [
+        {
+          "expected_column": "Recharge_revenue",
+          "in_kpi_meta": true,
+          "actual_name": "Recharge_revenue",
+          "value_type": "amount",
+          "description": "The revenue generated from subscriber recharge transactions",
+          "group_name": "Instant_cdr_group",
+          "inferred_measure": "money",
+          "case_insensitive_rename": false
+        }
+      ],
+      "expected_dates": [
+        {
+          "expected": "INSTFCTDATE",
+          "in_kpi_meta": false,
+          "live_event_dates": [
+            "created_date",
+            "COMMON_Event_Date",
+            "FCT_DT",
+            "event_timestamp"
+          ]
+        }
+      ],
+      "issues": [
+        "expected_date_INSTFCTDATE_missing"
+      ]
+    },
+    {
+      "case": "E53",
+      "input": "Find customers whose lowest single recharge amount last month is above a given threshold.",
+      "expected_parent_condition": "INSTFCTDATE = CurrentMonth-1MONTHS AND Min(Recharge_revenue) ${operator} ${value}",
+      "request_measure": "mixed/check",
+      "expected_metrics": [
+        {
+          "expected_column": "Recharge_revenue",
+          "in_kpi_meta": true,
+          "actual_name": "Recharge_revenue",
+          "value_type": "amount",
+          "description": "The revenue generated from subscriber recharge transactions",
+          "group_name": "Instant_cdr_group",
+          "inferred_measure": "money",
+          "case_insensitive_rename": false
+        }
+      ],
+      "expected_dates": [
+        {
+          "expected": "INSTFCTDATE",
+          "in_kpi_meta": false,
+          "live_event_dates": [
+            "created_date",
+            "COMMON_Event_Date",
+            "FCT_DT",
+            "event_timestamp"
+          ]
+        }
+      ],
+      "issues": [
+        "expected_date_INSTFCTDATE_missing"
+      ]
+    },
+    {
+      "case": "E54",
+      "input": "Find customers based on the date of their most recent recharge amount activity within the last 90 days.",
+      "expected_parent_condition": "INSTFCTDATE >= CurrentTime-90DAYS AND INSTFCTDATE < CurrentTime AND Recharge_revenue > 0 AND Max(INSTFCTDATE) ${operator} ${value}",
+      "request_measure": "mixed/check",
+      "expected_metrics": [],
+      "expected_dates": [
+        {
+          "expected": "INSTFCTDATE",
+          "in_kpi_meta": false,
+          "live_event_dates": [
+            "created_date",
+            "COMMON_Event_Date",
+            "FCT_DT",
+            "event_timestamp"
+          ]
+        }
+      ],
+      "issues": [
+        "expected_date_INSTFCTDATE_missing"
+      ]
+    },
+    {
+      "case": "E55",
+      "input": "Find customers whose total outgoing SMS count in the last 30 days is above a given threshold.",
+      "expected_parent_condition": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(OG_Total_SMS_count) ${operator} ${value}",
+      "request_measure": "count",
+      "expected_metrics": [
+        {
+          "expected_column": "OG_Total_SMS_count",
+          "in_kpi_meta": true,
+          "actual_name": "OG_Total_SMS_count",
+          "value_type": "count",
+          "description": "Indicates the outgoing SMS event count. The value is 1 if the event type is SMS; otherwise 0",
+          "group_name": "Instant_cdr_group",
+          "inferred_measure": "count",
+          "case_insensitive_rename": false
+        }
+      ],
+      "expected_dates": [
+        {
+          "expected": "INSTFCTDATE",
+          "in_kpi_meta": false,
+          "live_event_dates": [
+            "created_date",
+            "COMMON_Event_Date",
+            "FCT_DT",
+            "event_timestamp"
+          ]
+        }
+      ],
+      "issues": [
+        "expected_date_INSTFCTDATE_missing"
+      ]
+    },
+    {
+      "case": "E56",
+      "input": "Find customers whose total outgoing on-net SMS count in the last 30 days is above a given threshold.",
+      "expected_parent_condition": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(OG_SMS_Onnet_count) ${operator} ${value}",
+      "request_measure": "count",
+      "expected_metrics": [
+        {
+          "expected_column": "OG_SMS_Onnet_count",
+          "in_kpi_meta": false,
+          "actual_name": null,
+          "value_type": null,
+          "description": null,
+          "inferred_measure": null,
+          "live_near_matches": [
+            {
+              "name": "OG_Total_SMS_count",
+              "value_type": "count",
+              "description": "Indicates the outgoing SMS event count. The value is 1 if the event type is SMS; otherwise 0"
+            },
+            {
+              "name": "OG_SMS_Onnet_Revenue",
+              "value_type": "amount",
+              "description": "Revenue generated from outgoing SMS sent within the same operator\u2019s network."
+            },
+            {
+              "name": "CUST_360_ONNET_SMS_90D",
+              "value_type": "count",
+              "description": "Represents the total number of SMS sent to subscribers within the same telecom network (On-net SMS) during the last 90 days."
+            },
+            {
+              "name": "CUST_360_ONNET_SMS_60D",
+              "value_type": "count",
+              "description": "Represents the total number of SMS sent to subscribers within the same telecom network (On-net SMS) during the last 60 days."
+            },
+            {
+              "name": "CUST_360_ONNET_SMS_30D",
+              "value_type": "count",
+              "description": "Represents the total number of SMS sent to subscribers within the same telecom network (On-net SMS) during the last 30 days."
+            }
+          ]
+        }
+      ],
+      "expected_dates": [
+        {
+          "expected": "INSTFCTDATE",
+          "in_kpi_meta": false,
+          "live_event_dates": [
+            "created_date",
+            "COMMON_Event_Date",
+            "FCT_DT",
+            "event_timestamp"
+          ]
+        }
+      ],
+      "issues": [
+        "expected_date_INSTFCTDATE_missing",
+        "missing_column"
+      ]
+    },
+    {
+      "case": "E57",
+      "input": "Find customers whose total outgoing off-net SMS count in the last 30 days is above a given threshold.",
+      "expected_parent_condition": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(OG_SMS_Offnet_count) ${operator} ${value}",
+      "request_measure": "count",
+      "expected_metrics": [
+        {
+          "expected_column": "OG_SMS_Offnet_count",
+          "in_kpi_meta": false,
+          "actual_name": null,
+          "value_type": null,
+          "description": null,
+          "inferred_measure": null,
+          "live_near_matches": [
+            {
+              "name": "OG_Total_SMS_count",
+              "value_type": "count",
+              "description": "Indicates the outgoing SMS event count. The value is 1 if the event type is SMS; otherwise 0"
+            },
+            {
+              "name": "OG_SMS_Offnet_Revenue",
+              "value_type": "amount",
+              "description": "Revenue generated from outgoing SMS sent to subscribers of other telecom operators."
+            },
+            {
+              "name": "CUST_360_OFFNET_SMS_90D",
+              "value_type": "count",
+              "description": "Represents the total Off-net SMS sent during the last 90 days."
+            },
+            {
+              "name": "CUST_360_OFFNET_SMS_60D",
+              "value_type": "count",
+              "description": "Represents the total Off-net SMS sent during the last 60 days."
+            },
+            {
+              "name": "CUST_360_OFFNET_SMS_30D",
+              "value_type": "count",
+              "description": "Represents the total Off-net SMS sent during the last 30 days."
+            }
+          ]
+        }
+      ],
+      "expected_dates": [
+        {
+          "expected": "INSTFCTDATE",
+          "in_kpi_meta": false,
+          "live_event_dates": [
+            "created_date",
+            "COMMON_Event_Date",
+            "FCT_DT",
+            "event_timestamp"
+          ]
+        }
+      ],
+      "issues": [
+        "expected_date_INSTFCTDATE_missing",
+        "missing_column"
+      ]
+    },
+    {
+      "case": "E58",
+      "input": "Find customers whose total outgoing IDD SMS count in the last 30 days is above a given threshold.",
+      "expected_parent_condition": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(OG_SMS_Idd_count) ${operator} ${value}",
+      "request_measure": "count",
+      "expected_metrics": [
+        {
+          "expected_column": "OG_SMS_Idd_count",
+          "in_kpi_meta": false,
+          "actual_name": null,
+          "value_type": null,
+          "description": null,
+          "inferred_measure": null,
+          "live_near_matches": [
+            {
+              "name": "COMMON_OG_IDD_PAYG_SMS_COUNT",
+              "value_type": "count",
+              "description": "Total number of Outgoing International PAYG SMS occurrences"
+            },
+            {
+              "name": "COMMON_OG_IDD_FREE_SMS_COUNT",
+              "value_type": "count",
+              "description": "Total number of Outgoing International FREE SMS occurrences"
+            },
+            {
+              "name": "COMMON_OG_IDD_BUNDLE_SMS_COUNT",
+              "value_type": "count",
+              "description": "Total number of Outgoing International Bundle SMS occurrences"
+            },
+            {
+              "name": "OG_Total_SMS_count",
+              "value_type": "count",
+              "description": "Indicates the outgoing SMS event count. The value is 1 if the event type is SMS; otherwise 0"
+            },
+            {
+              "name": "OG_SMS_Idd_Revenue",
+              "value_type": "amount",
+              "description": "Revenue generated from outgoing international SMS sent by the subscriber"
+            }
+          ]
+        }
+      ],
+      "expected_dates": [
+        {
+          "expected": "INSTFCTDATE",
+          "in_kpi_meta": false,
+          "live_event_dates": [
+            "created_date",
+            "COMMON_Event_Date",
+            "FCT_DT",
+            "event_timestamp"
+          ]
+        }
+      ],
+      "issues": [
+        "expected_date_INSTFCTDATE_missing",
+        "missing_column"
+      ]
+    },
+    {
+      "case": "E59",
+      "input": "Find customers in a specified segment who received a promotion in the last X days.",
+      "expected_parent_condition": "L_SENT_DATE >= CurrentTime-${X}DAYS AND L_SEGMENT_NAME ${operator} ${value} AND L_ACTION_TYPE IN LIST (Promotion;PROMOTION;promotion) AND COUNT_ALL(L_MSISDN) > 0",
+      "request_measure": "other",
+      "expected_metrics": [
+        {
+          "expected_column": "L_MSISDN",
+          "in_kpi_meta": true,
+          "actual_name": "L_MSISDN",
+          "value_type": "text",
+          "description": "root profile MSISDN column",
+          "group_name": "LIFECYCLE_CDR",
+          "inferred_measure": "text",
+          "case_insensitive_rename": false
+        }
+      ],
+      "expected_dates": [
+        {
+          "expected": "INSTFCTDATE",
+          "in_kpi_meta": false,
+          "live_event_dates": [
+            "created_date",
+            "COMMON_Event_Date",
+            "FCT_DT",
+            "event_timestamp"
+          ]
+        }
+      ],
+      "issues": [
+        "expected_date_INSTFCTDATE_missing"
+      ]
+    },
+    {
+      "case": "E60",
+      "input": "Find customers in a specified segment who received a bonus in the last X days.",
+      "expected_parent_condition": "L_SENT_DATE >= CurrentTime-${X}DAYS AND L_SEGMENT_NAME ${operator} ${value} AND L_ACTION_TYPE IN LIST (BONUS;Bonus;bonus) AND COUNT_ALL(L_MSISDN) > 0",
+      "request_measure": "other",
+      "expected_metrics": [
+        {
+          "expected_column": "L_MSISDN",
+          "in_kpi_meta": true,
+          "actual_name": "L_MSISDN",
+          "value_type": "text",
+          "description": "root profile MSISDN column",
+          "group_name": "LIFECYCLE_CDR",
+          "inferred_measure": "text",
+          "case_insensitive_rename": false
+        }
+      ],
+      "expected_dates": [
+        {
+          "expected": "INSTFCTDATE",
+          "in_kpi_meta": false,
+          "live_event_dates": [
+            "created_date",
+            "COMMON_Event_Date",
+            "FCT_DT",
+            "event_timestamp"
+          ]
+        }
+      ],
+      "issues": [
+        "expected_date_INSTFCTDATE_missing"
+      ]
+    },
+    {
+      "case": "E61",
+      "input": "Find customers in a specified segment who did not receive a promotion in the last X days.",
+      "expected_parent_condition": "L_SENT_DATE >= CurrentTime-${X}DAYS AND L_SEGMENT_NAME ${operator} ${value} AND L_ACTION_TYPE IN LIST (Promotion;PROMOTION;promotion) AND COUNT_ALL(L_MSISDN) = 0",
+      "request_measure": "other",
+      "expected_metrics": [
+        {
+          "expected_column": "L_MSISDN",
+          "in_kpi_meta": true,
+          "actual_name": "L_MSISDN",
+          "value_type": "text",
+          "description": "root profile MSISDN column",
+          "group_name": "LIFECYCLE_CDR",
+          "inferred_measure": "text",
+          "case_insensitive_rename": false
+        }
+      ],
+      "expected_dates": [
+        {
+          "expected": "INSTFCTDATE",
+          "in_kpi_meta": false,
+          "live_event_dates": [
+            "created_date",
+            "COMMON_Event_Date",
+            "FCT_DT",
+            "event_timestamp"
+          ]
+        }
+      ],
+      "issues": [
+        "expected_date_INSTFCTDATE_missing"
+      ]
+    },
+    {
+      "case": "E62",
+      "input": "Find customers in a specified segment who did not receive a bonus in the last X days.",
+      "expected_parent_condition": "L_SENT_DATE >= CurrentTime-${X}DAYS AND L_SEGMENT_NAME ${operator} ${value} AND L_ACTION_TYPE IN LIST (BONUS;Bonus;bonus) AND COUNT_ALL(L_MSISDN) = 0",
+      "request_measure": "other",
+      "expected_metrics": [
+        {
+          "expected_column": "L_MSISDN",
+          "in_kpi_meta": true,
+          "actual_name": "L_MSISDN",
+          "value_type": "text",
+          "description": "root profile MSISDN column",
+          "group_name": "LIFECYCLE_CDR",
+          "inferred_measure": "text",
+          "case_insensitive_rename": false
+        }
+      ],
+      "expected_dates": [
+        {
+          "expected": "INSTFCTDATE",
+          "in_kpi_meta": false,
+          "live_event_dates": [
+            "created_date",
+            "COMMON_Event_Date",
+            "FCT_DT",
+            "event_timestamp"
+          ]
+        }
+      ],
+      "issues": [
+        "expected_date_INSTFCTDATE_missing"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,62 @@
+[
+  {
+    "case": "D1",
+    "request_id": "D1-retest-20260917-001",
+    "sentence": "Find customers who recharged after the promo was sent to them.",
+    "expected_parent_condition": "I_RECHARGE_DATE >= $L_PROMO_SENT_DATE AND SUM(I_RECHARGE_AMOUNT) ${operator} ${value}",
+    "returned_parent_condition": "created_date <> NULL AND created_date >= $L_PROMO_SENT_DATE AND SUM(I_RECHARGE_AMOUNT) ${operator} ${value}",
+    "clarification": null,
+    "ok": true,
+    "failure_reason": null,
+    "elapsed_sec": 106.0,
+    "error": null
+  },
+  {
+    "case": "D2",
+    "request_id": "D2-retest-20260917-002",
+    "sentence": "Find customers who recharged within 7 days of the promo being sent.",
+    "expected_parent_condition": "I_RECHARGE_DATE >= $L_PROMO_SENT_DATE AND I_RECHARGE_DATE <= $L_PROMO_SENT_DATE+7DAYS AND SUM(I_RECHARGE_AMOUNT) ${operator} ${value}",
+    "returned_parent_condition": "RECHARGE_Event_Date >= $L_PROMO_SENT_DATE AND RECHARGE_Event_Date <= $L_PROMO_SENT_DATE+7DAYS AND LC_ACTION_TYPE IN LIST (Promotion;PROMOTION;promotion) AND COUNT_ALL(RECHARGE_Msisdn) ${operator} ${value}",
+    "clarification": null,
+    "ok": true,
+    "failure_reason": null,
+    "elapsed_sec": 125.8,
+    "error": null
+  },
+  {
+    "case": "D3",
+    "request_id": "D3-retest-20260917-003",
+    "sentence": "Find customers who got a promotion delivered in the last X days.",
+    "expected_parent_condition": "L_PROMO_SENT_DATE >= CurrentTime-${X}DAYS AND LC_ACTION_TYPE IN LIST (Promotion;PROMOTION;promotion) AND L_ACTION_KEY ${operator} ${value} AND COUNT_ALL(L_AGG_MSISDN) > 0",
+    "returned_parent_condition": "L_PROMO_SENT_DATE >= CurrentTime-${X}DAYS AND LC_ACTION_TYPE IN LIST (Promotion;PROMOTION;promotion) AND L_ACTION_KEY ${operator} ${value} AND COUNT_ALL(L_AGG_MSISDN) > 0",
+    "clarification": null,
+    "ok": true,
+    "failure_reason": null,
+    "elapsed_sec": 108.8,
+    "error": null
+  },
+  {
+    "case": "D4",
+    "request_id": "D4-retest-20260917-004",
+    "sentence": "Find customers who were not delivered a promotion in the last 180 days.",
+    "expected_parent_condition": "L_PROMO_SENT_DATE >= CurrentTime-180DAYS AND LC_ACTION_TYPE IN LIST (Promotion;PROMOTION;promotion) AND L_ACTION_KEY ${operator} ${value} AND COUNT_ALL(L_AGG_MSISDN) = 0",
+    "returned_parent_condition": "L_PROMO_SENT_DATE >= CurrentTime-180DAYS AND LC_ACTION_TYPE IN LIST (Promotion;PROMOTION;promotion) AND LC_SEGMENT_NAME ${operator} ${value} AND COUNT_ALL(L_AGG_MSISDN) = 0",
+    "clarification": null,
+    "ok": true,
+    "failure_reason": null,
+    "elapsed_sec": 103.6,
+    "error": null
+  },
+  {
+    "case": "D5",
+    "request_id": "D5-retest-20260917-005",
+    "sentence": "Find customers who received fewer than a specified number of bonuses in a specified number of days.",
+    "expected_parent_condition": "L_BONUS_SENT_DATE >= CurrentTime-${NoOfDays}DAYS AND L_BONUS_ACTION_KEY ${operator} ${value} AND COUNT_ALL(L_AGG_MSISDN) < ${NoOfBonus}",
+    "returned_parent_condition": "L_BONUS_SENT_DATE >= CurrentTime-${NoOfDays}DAYS AND LC_ACTION_TYPE IN LIST (BONUS;Bonus;bonus) AND COUNT_ALL(L_AGG_MSISDN) < ${NoOfBonus}",
+    "clarification": null,
+    "ok": true,
+    "failure_reason": null,
+    "elapsed_sec": 65.6,
+    "error": null
+  }
+]

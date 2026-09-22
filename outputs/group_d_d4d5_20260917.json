@@ -1,0 +1,24 @@
+[
+  {
+    "case": "D4",
+    "request_id": "D4-single-20260917-004",
+    "expected": "L_PROMO_SENT_DATE >= CurrentTime-180DAYS AND LC_ACTION_TYPE IN LIST (Promotion;PROMOTION;promotion) AND L_ACTION_KEY ${operator} ${value} AND COUNT_ALL(L_AGG_MSISDN) = 0",
+    "returned": "L_PROMO_SENT_DATE >= CurrentTime-180DAYS AND LC_ACTION_TYPE IN LIST (Promotion;PROMOTION;promotion) AND L_ACTION_KEY ${operator} ${value} AND COUNT_ALL(L_AGG_MSISDN) = 0",
+    "clarification": null,
+    "ok": true,
+    "failure_reason": null,
+    "error": null,
+    "elapsed_sec": 94.0
+  },
+  {
+    "case": "D5",
+    "request_id": "D5-single-20260917-005",
+    "expected": "L_BONUS_SENT_DATE >= CurrentTime-${NoOfDays}DAYS AND L_BONUS_ACTION_KEY ${operator} ${value} AND COUNT_ALL(L_AGG_MSISDN) < ${NoOfBonus}",
+    "returned": "L_BONUS_SENT_DATE >= CurrentTime-${NoOfDays}DAYS AND LC_ACTION_TYPE IN LIST (BONUS;Bonus;bonus) AND COUNT_ALL(L_AGG_MSISDN) < ${NoOfBonus}",
+    "clarification": null,
+    "ok": true,
+    "failure_reason": null,
+    "error": null,
+    "elapsed_sec": 76.2
+  }
+]
