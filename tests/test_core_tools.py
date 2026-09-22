@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import asyncio
@@ -540,6 +541,167 @@ def test_pre_tool_hook_denies_subagent_before_render():
     assert "MCP pipeline" in output["permissionDecisionReason"]
 
 
+def _search(hook, query: str):
+    return asyncio.run(
+        hook({"tool_name": "ToolSearch", "tool_input": {"query": query}}, "tool-1", {"signal": None})
+    )
+
+
+def test_tool_search_loop_is_broken_after_one_retry():
+    # B1: six searches for normalize_slots, zero calls, then invented columns.
+    from vp_agent.hooks import make_hooks
+    from vp_agent.schemas import ToolState
+
+    hook = make_hooks(ToolState())["PreToolUse"][0].hooks[0]
+    query = "select:mcp__vp__normalize_slots"
+
+    assert _search(hook, query) == {}  # first load
+    assert _search(hook, query) == {}  # one retry is allowed
+    blocked = _search(hook, query)
+
+    output = blocked["hookSpecificOutput"]
+    assert output["permissionDecision"] == "deny"
+    assert "call the tool directly" in output["permissionDecisionReason"]
+
+
+def test_tool_search_is_not_blocked_once_the_tool_has_been_called():
+    from vp_agent.hooks import make_hooks
+    from vp_agent.schemas import ToolState
+
+    hook = make_hooks(ToolState())["PreToolUse"][0].hooks[0]
+    query = "select:mcp__vp__normalize_slots"
+
+    _search(hook, query)
+    asyncio.run(
+        hook({"tool_name": "mcp__vp__normalize_slots", "tool_input": {}}, "tool-2", {"signal": None})
+    )
+
+    assert _search(hook, query) == {}
+    assert _search(hook, query) == {}
+
+
+def test_stop_hook_blocks_finishing_without_a_rendered_rule():
+    from vp_agent.hooks import make_hooks
+    from vp_agent.schemas import ToolState
+
+    state = ToolState(retrieval_audit_ids=["audit-1"])
+    hook = make_hooks(state)["Stop"][0].hooks[0]
+
+    result = asyncio.run(hook({"stop_hook_active": False}, "stop-1", {"signal": None}))
+    assert result["decision"] == "block"
+    assert "render_condition" in result["reason"]
+
+    # Exactly one intervention, so a genuine clarification can still finish.
+    assert asyncio.run(hook({"stop_hook_active": False}, "stop-2", {"signal": None})) == {}
+
+
+def test_stop_hook_names_the_missing_evidence_when_nothing_was_retrieved():
+    # B4: asked what "non-responder" meant without calling a single tool, while
+    # the client's own VP names define the term twenty times over.
+    from vp_agent.hooks import make_hooks
+    from vp_agent.schemas import ToolState
+
+    hook = make_hooks(ToolState())["Stop"][0].hooks[0]
+    result = asyncio.run(hook({"stop_hook_active": False}, "stop-1", {"signal": None}))
+
+    assert result["decision"] == "block"
+    assert "retrieve_columns" in result["reason"]
+    assert "retrieve_existing_vps" in result["reason"]
+
+
+def test_production_usage_separates_identically_documented_columns():
+    # B5: L_AGG_MSISDN and L_AGG_CNT share a description word for word, so only
+    # how often production uses each can tell them apart.
+    from vp_agent.tools.retrieval_index import client_column_usage
+
+    usage = client_column_usage("omantel")
+
+    assert usage.get("L_AGG_MSISDN", 0) > usage.get("L_AGG_CNT", 0)
+
+
+def test_seed_clause_regression_catches_a_dropped_null_guard():
+    # B5 selected S42_promo_groupby_max and rendered everything except its
+    # `Max({date_col}) <> NULL` clause — the "confirmed by the sent date" part.
+    from vp_agent.tools.validate import seed_clause_regressions
+
+    template = (
+        "{date_col} >= CurrentTime-{N}DAYS AND {key_col} ${operator} ${value} "
+        "AND COUNT_ALL({count_col})__groupby_{key_col} > 0 AND Max({date_col}) <> NULL"
+    )
+    rendered = (
+        "L_SENT_DATE >= CurrentTime-2DAYS AND L_ACTION_KEY ${operator} ${value} "
+        "AND COUNT_ALL(L_AGG_CNT)__groupby_L_ACTION_KEY > 0"
+    )
+
+    clauses = [item["clause"] for item in seed_clause_regressions(rendered, template)]
+    assert clauses == ["null_guard"]
+
+
+def test_seed_clause_regression_is_silent_when_the_rule_keeps_the_skeleton():
+    from vp_agent.tools.validate import seed_clause_regressions
+
+    template = (
+        "{date_col} >= CurrentTime-{N}DAYS AND {key_col} ${operator} ${value} "
+        "AND COUNT_ALL({count_col})__groupby_{key_col} > 0 AND Max({date_col}) <> NULL"
+    )
+    rendered = (
+        "L_PROMO_SENT_DATE >= CurrentTime-2DAYS AND L_ACTION_KEY ${operator} ${value} "
+        "AND COUNT_ALL(L_AGG_MSISDN)__groupby_L_ACTION_KEY > 0 AND Max(L_PROMO_SENT_DATE) <> NULL"
+    )
+
+    assert seed_clause_regressions(rendered, template) == []
+
+
+def test_convention_check_reports_a_production_guard_the_rule_drops():
+    # The wrong aggregated column used to silence this check entirely: the
+    # production twin aggregates L_AGG_MSISDN, so keying on L_AGG_CNT matched
+    # nothing. The selector-column fallback finds it anyway.
+    from vp_agent.tools.validate import production_shape_differences
+
+    rendered = (
+        "L_SENT_DATE >= CurrentTime-2DAYS AND L_ACTION_KEY ${operator} ${value} "
+        "AND COUNT_ALL(L_AGG_CNT)__groupby_L_ACTION_KEY > 0"
+    )
+
+    findings = production_shape_differences(rendered, "omantel")
+    joined = " ".join(difference for item in findings for difference in item["differences"])
+
+    assert findings
+    assert "presence guard" in joined, joined
+
+
+def test_compound_variants_bridge_marketer_spacing_to_catalog_naming():
+    # "non-responders" tokenizes to non + responders; the VP name carries the
+    # single token nonresponder, so without bridging they never match at all.
+    from vp_agent.text import tokens
+    from vp_agent.tools.retrieve_vps import _compound_variants
+
+    variants = _compound_variants(tokens("non-responders to a bonus"))
+
+    assert "nonresponder" in variants
+    assert "nonresponders" in variants
+    assert "actionkey" in _compound_variants(tokens("a particular action key"))
+
+
+def test_existing_vp_lookup_finds_the_nonresponder_family():
+    from vp_agent.tools.retrieve_vps import retrieve_existing_vps
+
+    candidates = retrieve_existing_vps("non-responders to a bonus in the last 4 days", "omantel")
+    names = [item["name"] for item in candidates]
+
+    assert any("NONRESPONDER" in name for name in names), names
+
+
+def test_stop_hook_stays_out_of_the_way_once_the_rule_is_rendered():
+    from vp_agent.hooks import make_hooks
+    from vp_agent.schemas import ToolState
+
+    state = ToolState(render_seen=True)
+    hook = make_hooks(state)["Stop"][0].hooks[0]
+
+    assert asyncio.run(hook({"stop_hook_active": False}, "stop-1", {"signal": None})) == {}
+
+
 def test_render_hook_stores_parent_condition():
     from vp_agent.hooks import make_hooks
     from vp_agent.schemas import ToolState
@@ -576,7 +738,9 @@ def test_render_hook_stores_parent_condition_from_text_json():
         "AND COMMON_Event_Date >= CurrentTime-7DAYS "
         "AND SUM(COMMON_OG_Local_Offnet_Sms_Revenue) ${operator} ${value}"
     )
-    state = ToolState()
+    # An aggregate rendered without consulting select_seed now draws an advisory,
+    # so mark it called: this test is about storing the condition, not warnings.
+    state = ToolState(tools_called={"mcp__vp__select_seed"})
     hook = make_hooks(state)["PostToolUse"][0].hooks[0]
 
     result = asyncio.run(
@@ -933,6 +1097,8 @@ def test_role_aware_batch_returns_compact_candidates_per_role():
         "description",
         "time_window_support",
         "score",
+        "observed_values",
+        "production_uses",
         "adaptations",
         "evidence",
     }
@@ -954,11 +1120,28 @@ def test_targeted_retrieval_expansion_reuses_ranked_audit_pages():
 
 
 def test_group_date_configuration_and_subscription_override():
-    assert date_column_for_group("Instant_cdr_group") == "FCT_DT"
+    # Instant_cdr_group was configured to FCT_DT, which appears in 0 production
+    # rules; created_date appears in 8.
+    assert date_column_for_group("Instant_cdr_group") == "created_date"
     assert date_column_for_group("Common_Seg_Fct") == "COMMON_Event_Date"
-    assert date_column_for_group("Subscriptions", {"raw_request": "subscription purchase"}) == "SUBSCRIPTIONS_DT"
+    assert date_column_for_group("Subscriptions", {"raw_request": "subscription purchase"}) == "SUBSCRIPTIONS_EVENT_DATE"
     assert date_column_for_group("Subscriptions", {"raw_request": "subscription cancellation events"}) == "SUBSCRIPTIONS_EVENT_DATE"
+
+
+def test_lifecycle_date_column_follows_the_event_type():
+    # Production: L_PROMO_SENT_DATE 47 rules, L_BONUS_SENT_DATE 12, L_SENT_DATE 16.
+    # A single default put the wrong date into every promotion and bonus rule.
     assert date_column_for_group("LIFECYCLE_CDR") == "L_SENT_DATE"
+    assert date_column_for_group("LIFECYCLE_CDR", {"raw_request": "got a promotion delivered"}) == "L_PROMO_SENT_DATE"
+    assert date_column_for_group("LIFECYCLE_CDR", {"raw_request": "received fewer than 3 bonuses"}) == "L_BONUS_SENT_DATE"
+    assert (
+        date_column_for_group(
+            "LIFECYCLE_CDR",
+            {"kpi_phrase": "count of customers", "filters": [{"phrase": "promotion", "value": ["Promotion"]}]},
+        )
+        == "L_PROMO_SENT_DATE"
+    )
+    assert date_column_for_group("LIFECYCLE_CDR", {"raw_request": "any lifecycle event"}) == "L_SENT_DATE"
 
 
 def test_week_token_aliases_keep_reviewed_four_week_average_snapshot_in_top_five():
@@ -1005,6 +1188,48 @@ def test_value_vocabulary_links_marketer_values_to_their_columns():
     assert "iphone" in vocabulary.get("Profile_Cdr_Handset_Type", ())
 
 
+def test_observed_values_preserve_production_casing():
+    from vp_agent.tools.retrieval_index import column_observed_values
+
+    action_type = column_observed_values().get("LC_ACTION_TYPE", ())
+
+    # The casing is the whole point: a single-case equality under-selects, which
+    # is why every production rule matches this column as a membership list.
+    assert {"Promotion", "PROMOTION", "promotion"} <= set(action_type)
+    assert {"BONUS", "Bonus", "bonus"} <= set(action_type)
+
+
+def test_observed_values_exclude_date_anchors_and_keywords():
+    from vp_agent.tools.retrieval_index import column_observed_values
+
+    anchor = re.compile(r"Current(?:Time|Week|Month)", re.I)
+    for column, values in column_observed_values().items():
+        for value in values:
+            assert not anchor.search(value), f"{column} kept a date anchor: {value}"
+            assert value.upper() != "NULL", f"{column} kept a NULL guard"
+
+
+def test_categorical_candidates_expose_their_observed_values():
+    slots = {
+        "raw_request": "customers who got a promotion in the last 4 days",
+        "domain": "lifecycle",
+        "kpi_phrase": "promotion count",
+        "aggregate": "COUNT",
+        "time_token": "4D",
+        "filters": [{"phrase": "promotion", "operator": "=", "value": "promotion", "domain": "lifecycle"}],
+    }
+
+    page = compact_retrieval_page(build_retrieval_audit(slots, "omantel"), audit_id="promo")
+    shown = {
+        item["feature_name"]: item["observed_values"]
+        for role in page["filter_candidates"]
+        for item in role["candidates"]
+    }
+
+    assert "LC_ACTION_TYPE" in shown
+    assert "Promotion" in shown["LC_ACTION_TYPE"]
+
+
 def test_retrieval_finds_nationality_from_a_bare_value():
     candidates = retrieve_columns({"kpi_phrase": "Indian"}, client="omantel", top_k=5)
 
@@ -1040,6 +1265,52 @@ def test_unexplained_terms_tolerate_plurals_and_synonyms():
 
     assert unexplained_phrase_terms("smartphones", [handset]) == []
     assert unexplained_phrase_terms("smartphone customers", [handset]) == []
+
+
+def test_unaddressed_terms_catch_a_phrase_that_never_became_a_role():
+    # The Z1 regression: "based on segment name" was dropped at extraction, so
+    # no role carried it, retrieval never searched for LC_SEGMENT_NAME, and the
+    # agent then cited that silence as proof no segment column existed.
+    # Per-role unexplained_terms cannot see this; only a whole-request sweep can.
+    from vp_agent.tools.retrieve import unaddressed_request_terms
+
+    slots = {
+        "kpi_phrase": "promotion count",
+        "aggregate": "COUNT_ALL",
+        "filters": [
+            {"phrase": "promotion", "operator": "IN LIST", "value": ["Promotion", "PROMOTION", "promotion"]}
+        ],
+        "negations": ["did not get any promotion"],
+    }
+    request = "Find customers who did not get any promotion in the last 4 days, based on segment name."
+
+    assert unaddressed_request_terms(request, slots) == ["segment", "name"]
+
+
+def test_unaddressed_terms_stay_silent_once_the_selector_is_a_role():
+    from vp_agent.tools.retrieve import unaddressed_request_terms
+
+    slots = {
+        "kpi_phrase": "promotion count",
+        "filters": [
+            {"phrase": "promotion", "operator": "IN LIST", "value": ["Promotion"]},
+            {"phrase": "segment name", "operator": "runtime", "value": None},
+        ],
+        "negations": ["did not get any promotion"],
+    }
+    request = "Find customers who did not get any promotion in the last 4 days, based on segment name."
+
+    assert unaddressed_request_terms(request, slots) == []
+
+
+def test_unaddressed_terms_ignore_window_words_already_in_the_time_token():
+    # "last"/"days" are represented by time_token, so reporting them on every
+    # request would bury the real signal.
+    from vp_agent.tools.retrieve import unaddressed_request_terms
+
+    slots = {"kpi_phrase": "data revenue", "time_token": "30D", "filters": []}
+
+    assert unaddressed_request_terms("Find customers with data revenue in the last 30 days", slots) == []
 
 
 def test_retrieval_page_reports_unexplained_terms_per_role():
@@ -1441,6 +1712,28 @@ def test_intent_sweep_flags_dropped_service_scope():
 
     assert "scope" in _intent_cues(generic, request)
     assert "scope" not in _intent_cues(scoped, request)
+
+
+def test_intent_sweep_flags_an_event_type_folded_into_the_kpi_phrase():
+    request = "Find customers who got a any promotion within the last 4 days."
+    dropped = "L_SENT_DATE >= CurrentTime-4DAYS AND COUNT_ALL(L_AGG_CNT) ${operator} ${value}"
+    kept = (
+        "L_SENT_DATE >= CurrentTime-4DAYS AND LC_ACTION_TYPE IN LIST (Promotion;PROMOTION;promotion) "
+        "AND COUNT_ALL(L_AGG_CNT) ${operator} ${value}"
+    )
+
+    assert "category_value" in _intent_cues(dropped, request)
+    assert "category_value" not in _intent_cues(kept, request)
+
+
+def test_category_value_check_accepts_a_different_column_for_the_same_concept():
+    from vp_agent.tools.validate import dropped_category_values
+
+    # Production mines "smartphone" onto Profile_Cdr_Handset_Type, but a 360
+    # rule expresses the same constraint on a differently named column.
+    rule = 'CUST_360_HANDSET_TYPE = "SP" AND CUST_360_RECHARGE_AMOUNT_30D ${operator} ${value}'
+
+    assert dropped_category_values(rule, "smartphone customers who recharged in the last 30 days") == []
 
 
 def test_intent_sweep_is_quiet_on_a_plain_request():
@@ -2024,3 +2317,611 @@ def test_selected_golden_snapshot_cases_render_raw_when_supported():
         assert "CurrentMonth" not in rule
         assert "CurrentTime" not in rule
         assert "Event_Date" not in rule
+
+
+def test_count_all_over_a_categorical_column_is_an_error():
+    # B1: kpi_meta holds 109 categorical columns and production counts none of
+    # them, yet the rule counted the promotion filter itself.
+    from vp_agent.tools.validate import aggregate_shape_errors
+
+    rule = (
+        "L_SENT_DATE >= CurrentTime-4DAYS AND LC_ACTION_TYPE IN LIST (Promotion;PROMOTION;promotion) "
+        "AND L_ACTION_KEY ${operator} ${value} AND COUNT_ALL(LC_ACTION_TYPE) > 0"
+    )
+
+    assert [e["class"] for e in aggregate_shape_errors(rule)] == ["aggregate"]
+    assert "categorical" in aggregate_shape_errors(rule)[0]["message"]
+
+
+def test_grouping_by_the_counted_column_is_an_error():
+    # B5. Zero of 44 production groupby usages name the aggregated column.
+    from vp_agent.tools.validate import aggregate_shape_errors
+
+    rule = (
+        "L_SENT_DATE >= CurrentTime-2DAYS AND "
+        "COUNT_ALL(L_AGG_MSISDN)__groupby_L_AGG_MSISDN ${operator} ${value}"
+    )
+
+    assert any("groups by the column it aggregates" in e["message"] for e in aggregate_shape_errors(rule))
+
+
+def test_the_expected_promo_rule_passes_the_aggregate_checks():
+    from vp_agent.tools.validate import aggregate_shape_errors
+
+    rule = (
+        "L_PROMO_SENT_DATE >= CurrentTime-2DAYS AND L_ACTION_KEY ${operator} ${value} "
+        "AND COUNT_ALL(L_AGG_MSISDN)__groupby_L_ACTION_KEY > 0 AND Max(L_PROMO_SENT_DATE) <> NULL"
+    )
+
+    assert aggregate_shape_errors(rule) == []
+
+
+def test_seed_slot_coverage_notices_a_column_doing_two_jobs():
+    # S39 needs four distinct columns; the run supplied three.
+    from vp_agent.tools.validate import seed_slot_coverage
+
+    template = (
+        "{date_col} >= CurrentTime-{N}DAYS AND LC_ACTION_TYPE IN LIST (Promotion;PROMOTION;promotion) "
+        "AND {key_col} ${operator} ${value} AND COUNT_ALL({count_col}) > 0"
+    )
+    short = (
+        "L_SENT_DATE >= CurrentTime-4DAYS AND LC_ACTION_TYPE IN LIST (Promotion;PROMOTION;promotion) "
+        "AND L_ACTION_KEY ${operator} ${value} AND COUNT_ALL(LC_ACTION_TYPE) > 0"
+    )
+    complete = short.replace("COUNT_ALL(LC_ACTION_TYPE)", "COUNT_ALL(L_AGG_MSISDN)")
+
+    assert [item["clause"] for item in seed_slot_coverage(short, template)] == ["slot_coverage"]
+    assert seed_slot_coverage(complete, template) == []
+
+
+def test_new_aggregate_checks_do_not_fire_on_real_production_rules():
+    # The guard against another over-eager check: 713 client VPs, zero errors.
+    import csv
+    import glob
+
+    from vp_agent.config import load_settings
+    from vp_agent.tools.validate import aggregate_shape_errors
+
+    conditions = [
+        row.get("PARENT_CONDITION") or ""
+        for path in glob.glob(str(load_settings().data_dir / "vpdesc-all-*.csv"))
+        for row in csv.DictReader(open(path))
+    ]
+
+    assert conditions
+    assert [c for c in conditions if aggregate_shape_errors(c)] == []
+
+
+def test_convention_check_ignores_rules_that_merely_share_the_counted_column():
+    # B2: this rule was correct on the first render. It was compared against the
+    # positive per-action-key presence family purely because both count
+    # L_AGG_MSISDN, told it was missing a Max(...) <> NULL guard, and edited
+    # until the warnings hit zero.
+    from vp_agent.tools.validate import production_shape_differences
+
+    correct = (
+        "L_SENT_DATE >= CurrentTime-4DAYS AND LC_ACTION_TYPE IN LIST (Promotion;PROMOTION;promotion) "
+        "AND LC_SEGMENT_NAME ${operator} ${value} AND COUNT_ALL(L_AGG_MSISDN) = 0"
+    )
+
+    assert production_shape_differences(correct, "omantel") == []
+
+
+def test_convention_check_still_reports_a_genuinely_comparable_rule():
+    from vp_agent.tools.validate import production_shape_differences
+
+    misplaced_pair = (
+        "L_SENT_DATE >= CurrentTime-2DAYS AND LC_ACTION_TYPE IN LIST (Promotion;PROMOTION;promotion) "
+        "AND COUNT_ALL(L_AGG_MSISDN)__groupby_L_AGG_MSISDN ${operator} ${value} "
+        "AND Max(L_SENT_DATE) <> NULL"
+    )
+
+    findings = production_shape_differences(misplaced_pair, "omantel")
+    assert findings
+    assert all(item["column_overlap"] >= 0.5 for item in findings)
+    assert any("puts ${operator} ${value} on the column" in d for item in findings for d in item["differences"])
+
+
+def test_production_role_usage_separates_selector_from_counted_column():
+    # Both are strings, so data type cannot separate them; the role they play in
+    # production can.
+    from vp_agent.tools.retrieval_index import client_role_usage
+
+    usage = client_role_usage("omantel")
+
+    assert usage["aggregated"]["L_AGG_MSISDN"] > usage["aggregated"].get("L_ACTION_KEY", 0)
+    assert usage["pair_owner"]["L_ACTION_KEY"] > usage["pair_owner"].get("L_AGG_MSISDN", 0)
+
+
+def test_seed_resolver_gives_distinct_roles_distinct_columns():
+    # B5: key_col and count_col both resolved to L_AGG_MSISDN, which rendered as
+    # COUNT_ALL(L_AGG_MSISDN)__groupby_L_AGG_MSISDN.
+    from vp_agent.tools.seed import select_seed
+
+    result = select_seed(
+        slots={
+            "domain": "lifecycle",
+            "kpi_phrase": "promotional send count",
+            "time_token": "2D",
+            "operator": ">",
+            "value": "",
+            "aggregate": "COUNT_ALL",
+        },
+        client="omantel",
+        table="LIFECYCLE_CDR",
+        columns=[
+            {"feature_name": "L_AGG_MSISDN"},
+            {"feature_name": "L_ACTION_KEY"},
+            {"feature_name": "LC_ACTION_TYPE"},
+        ],
+    )
+    variables = (result.get("proposed_selected_seed") or {}).get("suggested_variables") or {}
+
+    assert variables.get("key_col") == "L_ACTION_KEY"
+    assert variables.get("count_col") == "L_AGG_MSISDN"
+    columns = [value for name, value in variables.items() if name.endswith("_col")]
+    assert len(columns) == len(set(columns)), variables
+
+
+def test_seed_resolver_leaves_a_role_unfilled_rather_than_guessing_a_bad_column():
+    # Only a categorical is left for count_col; production counts none, and
+    # validate_rule now rejects it, so an unfilled variable is the honest answer.
+    from vp_agent.tools.seed import select_seed
+
+    result = select_seed(
+        slots={"domain": "lifecycle", "kpi_phrase": "promotion received", "time_token": "4D", "aggregate": "COUNT"},
+        client="omantel",
+        table="LIFECYCLE_CDR",
+        columns=[{"feature_name": "LC_ACTION_TYPE"}, {"feature_name": "L_ACTION_KEY"}],
+    )
+    variables = (result.get("proposed_selected_seed") or {}).get("suggested_variables") or {}
+
+    assert variables.get("key_col") == "L_ACTION_KEY"
+    assert "count_col" not in variables
+
+
+def test_count_threshold_does_not_make_the_metric_column_numeric():
+    # B5 retest: the agent sent operator ">" value 0 for COUNT_ALL(...) > 0.
+    # Retrieval read that as "the metric column should be numeric", boosted every
+    # *_count column, and L_AGG_MSISDN never reached the page.
+    from vp_agent.tools.retrieve import build_retrieval_audit, compact_retrieval_page
+
+    slots = {
+        "kpi_phrase": "count of customers",
+        "time_token": "2D",
+        "domain": "lifecycle",
+        "operator": ">",
+        "value": 0,
+        "aggregate": "COUNT_ALL",
+        "filters": [{"phrase": "promotion action type", "operator": "IN LIST", "value": ["Promotion"]}],
+    }
+    page = compact_retrieval_page(build_retrieval_audit(slots, "omantel"), audit_id="count")
+    names = [item["feature_name"] for item in page["metric_candidates"]]
+
+    assert "L_AGG_MSISDN" in names, names
+    assert all(item["data_type"] != "numeric" for item in page["metric_candidates"])
+
+
+def test_count_all_over_numeric_or_date_is_an_error():
+    # 170 production COUNT_ALL usages, every one a string identifier.
+    from vp_agent.tools.validate import aggregate_shape_errors
+
+    assert aggregate_shape_errors("COUNT_ALL(Recharge_count) > 0")
+    assert aggregate_shape_errors("COUNT_ALL(L_PROMO_SENT_DATE) > 0")
+    assert aggregate_shape_errors("COUNT_ALL(L_AGG_MSISDN) > 0") == []
+
+
+def test_spaced_date_anchor_is_rejected():
+    # 660 production date anchors, none spaced.
+    from vp_agent.tools.validate import validate_rule
+
+    spaced = "L_PROMO_SENT_DATE >= CurrentTime - 2DAYS AND L_ACTION_KEY ${operator} ${value}"
+    tight = "L_PROMO_SENT_DATE >= CurrentTime-2DAYS AND L_ACTION_KEY ${operator} ${value}"
+
+    assert not validate_rule(spaced, request="x", client="omantel")["ok"]
+    assert validate_rule(tight, request="x", client="omantel")["ok"]
+
+
+def test_count_col_is_never_resolved_to_a_date_column():
+    # B5 retest: count_col resolved to L_PROMO_SENT_DATE.
+    from vp_agent.tools.seed import select_seed
+
+    result = select_seed(
+        slots={"domain": "lifecycle", "kpi_phrase": "promo sent count", "time_token": "2D", "aggregate": "COUNT_ALL"},
+        client="omantel",
+        table="LIFECYCLE_CDR",
+        columns=[
+            {"feature_name": "L_AGG_CNT"},
+            {"feature_name": "LC_ACTION_TYPE"},
+            {"feature_name": "L_PROMO_SENT_DATE"},
+        ],
+    )
+    variables = (result.get("proposed_selected_seed") or {}).get("suggested_variables") or {}
+
+    assert variables.get("count_col") != "L_PROMO_SENT_DATE"
+
+
+def test_selector_slot_refuses_a_column_production_only_ever_counts():
+    # C1/C2/C5: key_col resolved to L_AGG_MSISDN, which production counts 50
+    # times and never uses as a selector, leaving count_col empty.
+    from vp_agent.tools.seed import select_seed
+
+    result = select_seed(
+        slots={
+            "domain": "lifecycle",
+            "kpi_phrase": "customers who received bonuses",
+            "aggregate": "COUNT_ALL",
+            "time_token": "30D",
+            "operator": "<",
+            "value": 3,
+        },
+        client="omantel",
+        table="LIFECYCLE_CDR",
+        columns=[{"feature_name": "L_AGG_MSISDN"}, {"feature_name": "LC_ACTION_TYPE"}],
+    )
+    selected = result.get("proposed_selected_seed") or {}
+    variables = selected.get("suggested_variables") or {}
+
+    assert variables.get("count_col") == "L_AGG_MSISDN"
+    assert "key_col" not in variables
+
+    hint = selected.get("selector_hint") or {}
+    assert hint.get("unfilled_roles") == ["key_col"]
+    assert [item["column"] for item in hint["production_selectors"]][0] == "L_ACTION_KEY"
+
+
+def test_selector_hint_is_absent_when_the_slot_is_filled():
+    from vp_agent.tools.seed import select_seed
+
+    result = select_seed(
+        slots={
+            "domain": "lifecycle",
+            "kpi_phrase": "customers who received bonuses",
+            "aggregate": "COUNT_ALL",
+            "time_token": "30D",
+            "operator": "<",
+            "value": 3,
+        },
+        client="omantel",
+        table="LIFECYCLE_CDR",
+        columns=[
+            {"feature_name": "L_AGG_MSISDN"},
+            {"feature_name": "LC_ACTION_TYPE"},
+            {"feature_name": "L_BONUS_ACTION_KEY"},
+        ],
+    )
+    selected = result.get("proposed_selected_seed") or {}
+
+    assert (selected.get("suggested_variables") or {}).get("key_col") == "L_BONUS_ACTION_KEY"
+    assert "selector_hint" not in selected
+
+
+def test_a_stated_count_limit_is_not_reported_as_deferrable():
+    from vp_agent.tools.validate import validate_rule
+
+    rule = (
+        "L_SENT_DATE >= CurrentTime-30DAYS AND LC_ACTION_TYPE IN LIST (BONUS;Bonus;bonus) "
+        "AND COUNT_ALL(L_AGG_MSISDN) ${operator} ${value}"
+    )
+    stated = validate_rule(
+        rule,
+        request="Find customers who have received fewer than 3 bonuses in the last 30 days.",
+        client="omantel",
+    )
+    coverage = [w for w in stated["warnings"] if w["class"] == "coverage"]
+
+    assert coverage
+    assert "cannot be deferred" in coverage[0]["message"]
+    assert "fewer than 3" in coverage[0]["message"]
+
+
+def test_an_unstated_threshold_still_reads_as_deferrable():
+    from vp_agent.tools.validate import validate_rule
+
+    result = validate_rule(
+        "COMMON_Event_Date >= CurrentMonth-1MONTHS AND SUM(COMMON_Total_Revenue) ${operator} ${value}",
+        request="Find customers whose revenue in the last month is greater than a specified value",
+        client="omantel",
+    )
+
+    assert [w for w in result["warnings"] if w["class"] == "coverage"] == []
+
+
+def test_a_fully_specified_rule_is_legal_with_a_warning():
+    # C5 rendered this first and it was correct; "exactly one pair" rejected it,
+    # so the agent deleted the 3 to make room for the placeholders.
+    from vp_agent.tools.validate import validate_rule
+
+    rule = (
+        "L_SENT_DATE >= CurrentTime-1DAYS AND LC_ACTION_TYPE IN LIST (Promotion;PROMOTION;promotion) "
+        "AND COUNT_ALL(L_AGG_MSISDN) = 3"
+    )
+    result = validate_rule(rule, request="Find customers who received a promotion exactly 3 times today.", client="omantel")
+
+    assert result["ok"], result["errors"]
+    assert any(w["class"] == "render" and "no runtime" in w["message"] for w in result["warnings"])
+
+
+def test_placeholder_pair_errors_that_must_survive():
+    from vp_agent.tools.validate import validate_rule
+
+    for rule in (
+        "A ${operator} ${value} AND B ${operator} ${value}",   # two pairs
+        "COUNT_ALL(X) < ${value}",                              # half a pair
+        "A ${operator} AND B ${value}",                         # split pair
+    ):
+        assert not validate_rule(rule, request="x", client="omantel")["ok"], rule
+
+
+def test_every_pair_less_production_rule_now_validates():
+    import csv
+    import glob
+
+    from vp_agent.config import load_settings
+    from vp_agent.tools.validate import validate_rule
+
+    pair_less = [
+        row.get("PARENT_CONDITION") or ""
+        for path in glob.glob(str(load_settings().data_dir / "vpdesc-all-*.csv"))
+        for row in csv.DictReader(open(path))
+        if (row.get("PARENT_CONDITION") or "").strip() and "${operator}" not in (row.get("PARENT_CONDITION") or "")
+    ]
+
+    assert len(pair_less) >= 20, len(pair_less)
+    rejected = [c for c in pair_less if validate_rule(c, request="x", client="omantel")["errors"]]
+    assert rejected == [], rejected[:3]
+
+
+def test_control_group_disjunction_counts_as_one_runtime_pair():
+    # C3/C4: the expected answers repeat the pair with a _CG suffix, and the
+    # placeholder count rejected them as "two pairs".
+    from vp_agent.tools.validate import validate_rule
+
+    for rule in (
+        "(L_ACTION_KEY ${operator} ${value} OR L_ACTION_KEY ${operator} ${value}_CG) "
+        "AND COUNT_ALL(L_AGG_CNT)__groupby_L_ACTION_KEY > 0",
+        "(L_BONUS_ACTION_KEY ${operator} ${value} OR L_BONUS_ACTION_KEY ${operator} ${value}_CG) "
+        "AND COUNT_ALL(L_AGG_CNT)__groupby_L_BONUS_ACTION_KEY = 0",
+    ):
+        result = validate_rule(rule, request="x", client="omantel")
+        assert result["ok"], result["errors"]
+
+
+def test_two_unrelated_pairs_are_still_rejected():
+    from vp_agent.tools.validate import validate_rule
+
+    # Two different columns is not the control-group shape.
+    assert not validate_rule("A ${operator} ${value} AND B ${operator} ${value}", request="x", client="omantel")["ok"]
+    assert not validate_rule(
+        "(A ${operator} ${value} OR B ${operator} ${value}_CG) AND COUNT_ALL(X) > 0",
+        request="x",
+        client="omantel",
+    )["ok"]
+
+
+def test_control_group_wording_finds_the_production_family():
+    # The four rules that define the pattern have no "control" or "group" in
+    # their names; the only token in the data is "cg".
+    from vp_agent.tools.retrieve_vps import retrieve_existing_vps
+
+    names = [c["name"] for c in retrieve_existing_vps("promotion or its control-group variant", "omantel", top_k=6)]
+
+    assert "L_AK_PROMO_COUNT" in names, names
+    assert any(n.startswith("L_AK_") for n in names[:3]), names
+
+
+def test_runtime_variables_are_not_reported_as_unknown_columns():
+    # D1/D2: `$L_PROMO_SENT_DATE` and `$OM_MSISDN` are runtime variables the
+    # engine substitutes per subscriber, not kpi_meta columns.
+    from vp_agent.tools.validate import validate_rule
+
+    def column_warnings(rule):
+        return [w["tokens"] for w in validate_rule(rule, request="x", client="omantel")["warnings"] if w["class"] == "column"]
+
+    assert column_warnings("L_MSISDN = $OM_MSISDN AND COUNT_ALL(L_AGG_CNT) > 0") == []
+    assert (
+        column_warnings(
+            "created_date >= $L_PROMO_SENT_DATE AND created_date <= $L_PROMO_SENT_DATE+7DAYS "
+            "AND SUM(I_RECHARGE_AMOUNT) ${operator} ${value}"
+        )
+        == []
+    )
+    # A genuine unknown column must still be reported.
+    assert column_warnings("L_MSISDN = $OM_MSISDN AND COUNT_ALL(L_AGG_TYPOO) > 0") == [["L_AGG_TYPOO"]]
+
+
+def test_post_promo_recharge_rules_validate():
+    from vp_agent.tools.validate import validate_rule
+
+    for rule in (
+        "created_date >= $L_PROMO_SENT_DATE AND SUM(I_RECHARGE_AMOUNT) ${operator} ${value}",
+        "created_date >= $L_PROMO_SENT_DATE AND created_date <= $L_PROMO_SENT_DATE+7DAYS "
+        "AND SUM(I_RECHARGE_AMOUNT) ${operator} ${value}",
+    ):
+        assert validate_rule(rule, request="recharged after the promo was sent", client="omantel")["ok"]
+
+
+def test_zero_pair_warning_names_the_selector_production_uses():
+    # D3 shipped a pair-less rule with only "confirm the fixed form" to go on,
+    # because select_seed — which carries the same suggestion — was never called.
+    from vp_agent.tools.validate import validate_rule
+
+    rule = (
+        "L_PROMO_SENT_DATE >= CurrentTime-${X}DAYS AND LC_ACTION_TYPE IN LIST (Promotion;PROMOTION;promotion) "
+        "AND COUNT_ALL(L_AGG_MSISDN) > 0"
+    )
+    warning = next(
+        w for w in validate_rule(rule, request="x", client="omantel")["warnings"] if w["class"] == "render"
+    )
+
+    assert "L_ACTION_KEY" in warning["message"]
+    assert "29 rules" in warning["message"]
+
+
+def test_zero_pair_warning_degrades_without_a_client():
+    from vp_agent.tools.validate import validate_rule
+
+    warning = next(
+        w for w in validate_rule("COUNT_ALL(L_AGG_MSISDN) > 0", request="x")["warnings"] if w["class"] == "render"
+    )
+
+    assert "Confirm the fixed form" in warning["message"]
+
+
+def test_rendering_an_aggregate_without_select_seed_draws_an_advisory():
+    # D3 rendered a counted lifecycle rule having never called select_seed, so
+    # the seed catalog's selector suggestion was never seen.
+    import json as _json
+
+    from vp_agent.hooks import make_hooks
+    from vp_agent.schemas import ToolState
+
+    condition = "COMMON_Event_Date >= CurrentTime-7DAYS AND SUM(COMMON_Total_Revenue) ${operator} ${value}"
+
+    def run(state):
+        hook = make_hooks(state)["PostToolUse"][0].hooks[0]
+        return asyncio.run(
+            hook(
+                {
+                    "tool_name": "mcp__vp__render_condition",
+                    "tool_input": {"client": "omantel"},
+                    "tool_response": [{"type": "text", "text": _json.dumps({"parent_condition": condition})}],
+                },
+                "tool-1",
+                {"signal": None},
+            )
+        )
+
+    without = run(ToolState())
+    assert "select_seed was never called" in _json.dumps(without)
+
+    with_seed = run(ToolState(tools_called={"mcp__vp__select_seed"}))
+    assert "select_seed was never called" not in _json.dumps(with_seed)
+
+
+def test_any_scope_is_not_told_to_add_a_selector():
+    # "any promotion" is scoped by the event-type filter alone; adding a selector
+    # would narrow it to one promotion the marketer picks.
+    from vp_agent.tools.validate import validate_rule
+
+    rule = (
+        "L_PROMO_SENT_DATE >= CurrentTime-6DAYS AND LC_ACTION_TYPE IN LIST (Promotion;PROMOTION;promotion) "
+        "AND COUNT_ALL(L_AGG_MSISDN) > 0"
+    )
+
+    def render_warning(request):
+        return next(w for w in validate_rule(rule, request=request, client="omantel")["warnings"] if w["class"] == "render")
+
+    any_scope = render_warning("Find customers who got any promotion delivered in the last 6 days.")
+    assert "do not add a selector" in any_scope["message"]
+    assert "L_ACTION_KEY" not in any_scope["message"]
+
+    particular = render_warning("Find customers who got a particular promotion delivered in the last 6 days.")
+    assert "L_ACTION_KEY" in particular["message"]
+
+    # "based on segment name" names a selector even though "any" appears nearby.
+    scoped = render_warning("Find customers who did not get any promotion in the last 4 days, based on segment name.")
+    assert "L_ACTION_KEY" in scoped["message"] or "LC_SEGMENT_NAME" in scoped["message"]
+
+
+def test_retrieval_without_an_aggregate_is_flagged():
+    # D4 sent slots with no `aggregate`, so the metric gate never ran and a
+    # categorical column ranked first for "what should I count?".
+    import json as _json
+
+    from vp_agent.hooks import make_hooks
+    from vp_agent.schemas import ToolState
+
+    def run(slots):
+        state = ToolState(request="Find customers who were not delivered a promotion in the last 180 days.")
+        hook = make_hooks(state)["PostToolUse"][0].hooks[0]
+        return _json.dumps(
+            asyncio.run(
+                hook(
+                    {
+                        "tool_name": "mcp__vp__retrieve_columns",
+                        "tool_input": {"slots": slots},
+                        "tool_response": [{"type": "text", "text": _json.dumps({"audit_id": "a"})}],
+                    },
+                    "tool-1",
+                    {"signal": None},
+                )
+            )
+        )
+
+    base = {"kpi_phrase": "customers promotion delivered", "time_token": "180D", "domain": "lifecycle"}
+    assert "declare no `aggregate`" in run(base)
+    assert "declare no `aggregate`" not in run(dict(base, aggregate="COUNT_ALL"))
+    assert "declare no `aggregate`" not in run(dict(base, formula={"type": "percentage_of_kpi"}))
+
+
+def test_a_date_column_never_fills_the_selector_slot():
+    # D4 resolved key_col to L_SENT_DATE because one production rule groups by it.
+    from vp_agent.tools.seed import select_seed
+
+    variables = (
+        select_seed(
+            slots={"domain": "lifecycle", "kpi_phrase": "promotion delivered", "time_token": "180D", "aggregate": "COUNT_ALL"},
+            client="omantel",
+            table="LIFECYCLE_CDR",
+            columns=[{"feature_name": "LC_ACTION_TYPE"}, {"feature_name": "L_SENT_DATE"}],
+        ).get("proposed_selected_seed")
+        or {}
+    ).get("suggested_variables") or {}
+
+    assert variables.get("key_col") != "L_SENT_DATE"
+    assert "key_col" not in variables
+
+
+def test_a_parameterised_window_is_not_reported_as_no_window():
+    # D5: "a specified number of days" parsed as time_token "none", which made a
+    # seed gate delete the one template written for the request.
+    from vp_agent.tools.normalize import normalize_slots
+
+    def token(sentence):
+        return normalize_slots(sentence, client="omantel")["time_token"]
+
+    assert token("Find customers who received fewer than a specified number of bonuses in a specified number of days.") == "PARAM"
+    assert token("Find customers who got a promotion delivered in the last X days.") == "PARAM"
+    assert token("bonus less than N times in last X days") == "PARAM"
+    # Concrete and absent windows are unchanged.
+    assert token("Find customers who recharged in the last 30 days.") == "30D"
+    assert token("Find customers with high revenue") == "none"
+
+
+def test_a_seed_window_the_request_did_not_ask_for_is_an_adaptation_not_a_gate():
+    # S86_parameterized_bonus_sent matched the request's own phrase and was
+    # dropped because the window had been parsed as absent.
+    from vp_agent.tools.seed import build_seed_audit
+
+    audit = build_seed_audit(
+        {
+            "domain": "lifecycle",
+            "kpi_phrase": "customers who received bonuses",
+            "time_token": "none",
+            "operator": "<",
+            "aggregate": "COUNT",
+            "raw_request": "Find customers who received fewer than a specified number of bonuses.",
+        },
+        client="omantel",
+        table="LIFECYCLE_CDR",
+        columns=[{"feature_name": "L_AGG_MSISDN"}, {"feature_name": "L_BONUS_ACTION_KEY"}],
+    )
+    seed = next(c for c in audit["candidates"] if c["seed_id"] == "S86_parameterized_bonus_sent")
+
+    assert "time_window_not_requested" not in seed["gate_failures"]
+    assert seed["eligible"]
+    assert any("time_window_not_requested" in note for note in seed["adaptations"])
+
+
+def test_named_placeholders_do_not_count_toward_the_pair_rule():
+    from vp_agent.tools.validate import validate_rule
+
+    rule = (
+        "L_BONUS_SENT_DATE >= CurrentTime-${NoOfDays}DAYS AND L_BONUS_ACTION_KEY ${operator} ${value} "
+        "AND COUNT_ALL(L_AGG_MSISDN) < ${NoOfBonus}"
+    )
+    result = validate_rule(rule, request="fewer than a specified number of bonuses", client="omantel")
+
+    assert result["ok"], result["errors"]
+    assert not [w for w in result["warnings"] if w["class"] == "column"]

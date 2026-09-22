@@ -25,17 +25,29 @@ Resolver workflow:
    such as local/offnet/onnet/roaming/IDD, product type, time window, filters,
    aggregate intent, and threshold.
 2. Compare retrieved candidates with the golden patterns and KPI metadata.
-3. Prefer a matching Customer 360 snapshot only when the column itself encodes
+3. Match measure type before locking a column:
+   - From the request, decide what kind of thing is measured (money/charges,
+     volume/usage, count/events, status/flag, or another stated measure).
+   - Read each candidate's description and `value_type` / data type. Prefer a
+     column that matches both business scope and measure type.
+   - Shared wording in a description is not enough: if the candidate answers a
+     different measure question than the request, reject it.
+   - Prefer a same-measure match with weaker scope over a perfect scope match
+     with the wrong measure. If no same-measure candidate covers the requested
+     scope, ask a plain-English clarification instead of silently substituting.
+4. Prefer a matching Customer 360 snapshot only when the column itself encodes
    the requested period. Otherwise use event/summarized tables with date bounds.
-4. Do not invent columns. If no retrieved column matches the golden pattern,
+5. Do not invent columns. If no retrieved column matches the golden pattern,
    retry retrieval with better semantic terms or ask a clarification.
-5. For Variant 3, load `vp-metrics-comparison`; golden memory supplements its
+6. For Variant 3, load `vp-metrics-comparison`; golden memory supplements its
    reviewed dependency and formula rules rather than replacing them.
 
 Verifier workflow:
 
 1. Confirm the selected KPI family matches the marketer request, not just a
-   nearby word overlap.
+   nearby word overlap. Also confirm measure type: the chosen column must
+   measure the same kind of thing the request asked for unless the user
+   accepted a different measure.
 2. If the selected KPI is a snapshot such as `M1`, `W4`, `90D`, `MTD`, or
    similar, the KPI comparison should be raw and should not include an event
    date condition for that KPI.

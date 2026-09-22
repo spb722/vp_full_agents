@@ -10,6 +10,10 @@ Ask only plain-English questions. Batch related questions into one user turn.
 Ask when:
 
 - The KPI phrase maps to multiple business meanings with similar confidence.
+- The only scope-matching column answers a different measure question than the
+  request (for example money vs volume/usage vs count vs status). Do not
+  silently substitute a nearby wrong-measure KPI; ask in plain English which
+  measure they want.
 - The main event/aggregate KPI has no timeframe and no wrapper/default period.
 - A filter KPI has no timeframe only after retrieval fails to find a clear
   canonical snapshot/default period, or multiple period interpretations remain

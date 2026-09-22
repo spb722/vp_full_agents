@@ -10,6 +10,8 @@ from vp_agent.tools.retrieval_index import (
     build_retrieval_index,
     char_ngrams,
     client_column_prior,
+    client_column_usage,
+    column_observed_values,
     expand_tokens,
 )
 
@@ -39,7 +41,15 @@ def retrieve_columns(slots: dict[str, Any], client: str, exclude: list[str] | No
     time_token = str(slots.get("time_token") or "").lower()
     operator = str(slots.get("operator") or "")
     value = str(slots.get("value") or "")
-    numeric_threshold = operator in {">", ">=", "<", "<=", "between"} or value.replace(".", "", 1).isdigit()
+    aggregate = str(slots.get("aggregate") or "").upper()
+    # `COUNT_ALL(x) > 0` constrains the count, not x. Reading the ">" as "the
+    # metric column should be numeric" boosted every *_count column and pushed
+    # L_AGG_MSISDN — which production counts 50 times — out of the page entirely.
+    # Production counts a numeric column in none of its 170 COUNT_ALL usages.
+    counting = aggregate in {"COUNT", "COUNT_ALL"}
+    numeric_threshold = not counting and (
+        operator in {">", ">=", "<", "<=", "between"} or value.replace(".", "", 1).isdigit()
+    )
     domain = str(slots.get("domain", "")).lower()
     domain_terms = DOMAIN_HINTS.get(domain, set())
     index = build_retrieval_index()
@@ -76,6 +86,12 @@ def retrieve_columns(slots: dict[str, Any], client: str, exclude: list[str] | No
                 numeric_bonus = 5.0
             elif row.data_type.lower() in {"categorical", "string"}:
                 numeric_bonus = -4.0
+        elif counting:
+            # Mirror image, same evidence: what gets counted is an identifier.
+            if row.data_type.lower() == "string":
+                numeric_bonus = 3.0
+            elif row.data_type.lower() in {"numeric", "categorical"}:
+                numeric_bonus = -3.0
         main_bonus = main_overlap * 2.0 + main_feature_overlap * 3.0
         if all_main_terms_match:
             main_bonus += 10.0
@@ -349,6 +365,13 @@ def _role_gates(candidate: Candidate, slots: dict[str, Any], role: str) -> tuple
             blocks.append("metric_requires_non_date_column")
         if aggregate in {"SUM", "AVG", "MAX", "FORMULA"} and data_type in {"date", "string", "categorical"}:
             blocks.append("aggregate_requires_numeric_metric")
+        # Counting a string identifier is normal — production does it 170 times —
+        # but never a category. kpi_meta holds 109 categorical columns and not
+        # one is ever counted, because a two-valued category counts nothing
+        # meaningful. Without this, the promotion filter column ranked first for
+        # "what should I count?" and was rendered as COUNT_ALL(LC_ACTION_TYPE).
+        if aggregate in {"COUNT", "COUNT_ALL"} and data_type in {"categorical", "numeric", "date"}:
+            blocks.append("count_requires_identifier_metric")
         feature = candidate.feature_name.upper()
         if _is_snapshot(candidate):
             if aggregate == "SUM" and re.search(r"(^|_)(?:MAX|AVG)(_|$)", feature):
@@ -510,6 +533,61 @@ def unexplained_phrase_terms(phrase: str, candidates: list[Candidate]) -> list[s
     return leftover
 
 
+# Words that carry no attribute of their own: request scaffolding, and period
+# words already represented by `time_token`. Without these every request would
+# report "last"/"days" forever and the real signal would be buried.
+REQUEST_STOP_TERMS = GENERIC_PHRASE_TERMS | frozenset(
+    {
+        "find", "show", "give", "want", "need", "create", "vp", "rule", "audience",
+        "get", "gets", "got", "getting",
+        "based", "did", "does", "not", "no", "never", "than", "least", "most",
+        "where", "which", "whom", "there",
+        "last", "past", "previous", "prior", "within", "during", "over", "ago",
+        "day", "days", "week", "weeks", "month", "months", "year", "years",
+        "current", "today", "yesterday", "recent", "recently", "time", "period",
+    }
+)
+
+
+def unaddressed_request_terms(request: str, slots: dict[str, Any]) -> list[str]:
+    """Words in the request that no submitted role even mentions.
+
+    `unexplained_phrase_terms` grades a role's phrase against the column it
+    matched, so it can only see phrases the agent chose to submit. A phrase the
+    agent never turned into a role at all — "based on segment name" — is
+    invisible to it, and the agent then reads retrieval's silence as proof the
+    column does not exist. This closes that hole one stage earlier, by comparing
+    the whole request against every phrase the agent did send.
+    """
+    submitted = [
+        str(slots.get("kpi_phrase") or ""),
+        str(slots.get("metric") or ""),
+        str(slots.get("group_by") or ""),
+    ]
+    for item in slots.get("filters") or []:
+        if not isinstance(item, dict):
+            submitted.append(str(item))
+            continue
+        submitted.append(str(item.get("phrase") or ""))
+        value = item.get("value")
+        members = value if isinstance(value, list) else [value]
+        submitted.extend(str(member) for member in members if member is not None)
+    submitted.extend(str(item) for item in slots.get("negations") or [])
+
+    covered: set[str] = set()
+    for text in submitted:
+        covered.update(tokens(text))
+
+    return [
+        term
+        for term in dict.fromkeys(tokens(request))
+        if term not in REQUEST_STOP_TERMS
+        and term not in covered
+        and not term.isdigit()
+        and len(term) > 1
+    ]
+
+
 def _candidate_evidence(candidate: Candidate, slots: dict[str, Any], time_support: str, group_bonus: float) -> str:
     evidence: list[str] = []
     if candidate.bm25_norm >= 0.7 and candidate.embedding_norm >= 0.6:
@@ -536,6 +614,7 @@ def compact_candidate(
     qualifier_adjustment: float = 0.0,
     adaptations: list[str] | None = None,
     full_description: bool = False,
+    client: str | None = None,
 ) -> dict[str, Any]:
     time_support, _ = _time_support(candidate, slots)
     adaptations = adaptations or []
@@ -549,6 +628,14 @@ def compact_candidate(
         "description": candidate.description if full_description else _short_text(candidate.description),
         "time_window_support": time_support,
         "score": round(candidate.score + group_bonus + qualifier_adjustment, 3),
+        # Legal values with their production spelling. kpi_meta often records
+        # none, and the exact casing decides equality vs membership.
+        "observed_values": list(column_observed_values().get(candidate.feature_name, ()))[:8],
+        # How many of this client's production VPs use the column. Two columns
+        # can be documented identically; how often each is actually used is the
+        # evidence that separates them. Reported rather than scored, so the
+        # choice stays the agent's.
+        "production_uses": client_column_usage(client).get(candidate.feature_name, 0) if client else None,
         "adaptations": adaptations,
         "evidence": _candidate_evidence(candidate, slots, time_support, group_bonus),
     }
@@ -696,6 +783,7 @@ def compact_retrieval_page(
                 qualifier_adjustment=item["qualifier_adjustment"],
                 adaptations=item["adaptations"],
                 full_description=index < 2,
+                client=audit.get("client"),
             )
             for index, item in enumerate(page_items)
         ]

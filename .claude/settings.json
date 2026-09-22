@@ -4,10 +4,11 @@
       "Skill",
       "Read",
       "Agent",
+      "Bash",
       "mcp__vp__*"
     ],
     "deny": [
-      "Bash"
+      
     ]
   }
 }

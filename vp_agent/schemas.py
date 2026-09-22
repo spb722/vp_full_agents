@@ -50,6 +50,8 @@ class RouteDecision:
 
 @dataclass
 class ToolState:
+    request: str = ""
+    client: str = ""
     request_id: str | None = None
     console_trace: bool = False
     slots_seen: bool = False
@@ -60,6 +62,11 @@ class ToolState:
     selected_seed: str | None = None
     validation: dict[str, Any] | None = None
     verifier_verdict: dict[str, Any] | None = None
+    unaddressed_terms: list[str] = field(default_factory=list)
+    tools_loaded: set[str] = field(default_factory=set)
+    tools_called: set[str] = field(default_factory=set)
+    redundant_searches: dict[str, int] = field(default_factory=dict)
+    stop_blocks: int = 0
     column_candidates: list[dict[str, Any]] = field(default_factory=list)
     retrieval_audit_ids: list[str] = field(default_factory=list)
     seed_audit_ids: list[str] = field(default_factory=list)
