@@ -1,0 +1,312 @@
+[
+  {
+    "case": "E01",
+    "sentence": "Find customers whose average daily SMS revenue over the last 90 days is above a given threshold.",
+    "expected": "INSTFCTDATE >= CurrentTime-90DAYS AND INSTFCTDATE < CurrentTime AND SUM(V{AVG_DAILY_OG_SMS_REV}=f{Total_SMS_Revenue/90}) ${operator} ${value}"
+  },
+  {
+    "case": "E02",
+    "sentence": "Find customers whose total SMS revenue in the last 30 days is above a given threshold.",
+    "expected": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(Total_SMS_Revenue) ${operator} ${value}"
+  },
+  {
+    "case": "E03",
+    "sentence": "Find customers whose total data revenue in the last 30 days is above a given threshold.",
+    "expected": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(Total_Data_Revenue) ${operator} ${value}"
+  },
+  {
+    "case": "E04",
+    "sentence": "Find customers whose total uploaded data volume in the last 30 days is above a given threshold.",
+    "expected": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(Data_Upload) ${operator} ${value}"
+  },
+  {
+    "case": "E05",
+    "sentence": "Find customers whose total data roaming revenue in the last 30 days is above a given threshold.",
+    "expected": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(Data_Roaming_Revenue) ${operator} ${value}"
+  },
+  {
+    "case": "E06",
+    "sentence": "Find customers whose total out-of-bundle data usage in the last 30 days is above a given threshold.",
+    "expected": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(Data_Outbundle_Usage) ${operator} ${value}"
+  },
+  {
+    "case": "E07",
+    "sentence": "Find customers whose total out-of-bundle data revenue in the last 30 days is above a given threshold.",
+    "expected": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(Data_Outbundle_Revenue) ${operator} ${value}"
+  },
+  {
+    "case": "E08",
+    "sentence": "Find customers whose total in-bundle data usage in the last 30 days is above a given threshold.",
+    "expected": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(Data_Inbundle_Usage) ${operator} ${value}"
+  },
+  {
+    "case": "E09",
+    "sentence": "Find customers whose total in-bundle data revenue in the last 30 days is above a given threshold.",
+    "expected": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(Data_Inbundle_Revenue) ${operator} ${value}"
+  },
+  {
+    "case": "E10",
+    "sentence": "Find customers whose total downloaded data volume in the last 30 days is above a given threshold.",
+    "expected": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(Data_Dwnload) ${operator} ${value}"
+  },
+  {
+    "case": "E11",
+    "sentence": "Find customers whose average daily outgoing roaming voice revenue over the last 90 days is above a given threshold.",
+    "expected": "INSTFCTDATE >= CurrentTime-90DAYS AND INSTFCTDATE < CurrentTime AND SUM(V{AVG_DAILY_ROAM_VOICE_REV}=f{OG_Voice_Roaming_Revenue/90}) ${operator} ${value}"
+  },
+  {
+    "case": "E12",
+    "sentence": "Find customers whose average daily outgoing roaming SMS revenue over the last 90 days is above a given threshold.",
+    "expected": "INSTFCTDATE >= CurrentTime-90DAYS AND INSTFCTDATE < CurrentTime AND SUM(V{AVG_DAILY_ROAM_SMS_REV}=f{OG_SMS_Roaming_Revenue/90}) ${operator} ${value}"
+  },
+  {
+    "case": "E13",
+    "sentence": "Find customers whose total voice revenue in the last 7 days is above a given threshold.",
+    "expected": "INSTFCTDATE >= CurrentTime-7DAYS AND INSTFCTDATE < CurrentTime AND SUM(Total_Voice_Revenue) ${operator} ${value}"
+  },
+  {
+    "case": "E14",
+    "sentence": "Find customers whose total voice revenue in the last 30 days is above a given threshold.",
+    "expected": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(Total_Voice_Revenue) ${operator} ${value}"
+  },
+  {
+    "case": "E15",
+    "sentence": "Find customers whose total outgoing on-net voice revenue in the last 30 days is above a given threshold.",
+    "expected": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(OG_Voice_Onnet_Revenue) ${operator} ${value}"
+  },
+  {
+    "case": "E16",
+    "sentence": "Find customers whose total outgoing off-net voice revenue in the last 30 days is above a given threshold.",
+    "expected": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(OG_Voice_Offnet_Revenue) ${operator} ${value}"
+  },
+  {
+    "case": "E17",
+    "sentence": "Find customers whose total outgoing IDD voice revenue in the last 30 days is above a given threshold.",
+    "expected": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(OG_Voice_Idd_Revenue) ${operator} ${value}"
+  },
+  {
+    "case": "E18",
+    "sentence": "Find customers whose total outgoing call count in the last 30 days is above a given threshold.",
+    "expected": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(OG_Total_Voice_count) ${operator} ${value}"
+  },
+  {
+    "case": "E19",
+    "sentence": "Find customers whose total outgoing on-net call count in the last 30 days is above a given threshold.",
+    "expected": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(OG_Voice_Onnet_count) ${operator} ${value}"
+  },
+  {
+    "case": "E20",
+    "sentence": "Find customers whose total outgoing off-net call count in the last 30 days is above a given threshold.",
+    "expected": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(OG_Voice_Offnet_count) ${operator} ${value}"
+  },
+  {
+    "case": "E21",
+    "sentence": "Find customers whose total outgoing IDD call count in the last 30 days is above a given threshold.",
+    "expected": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(OG_Voice_Idd_count) ${operator} ${value}"
+  },
+  {
+    "case": "E22",
+    "sentence": "Find customers whose total outgoing roaming call count in the last 30 days is above a given threshold.",
+    "expected": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(OG_Voice_Roaming_count) ${operator} ${value}"
+  },
+  {
+    "case": "E23",
+    "sentence": "Find customers whose total outgoing roaming SMS count in the last 30 days is above a given threshold.",
+    "expected": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(OG_SMS_Roaming_count) ${operator} ${value}"
+  },
+  {
+    "case": "E24",
+    "sentence": "Find customers whose total outgoing call minutes in the last 30 days is above a given threshold.",
+    "expected": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(OG_Total_Voice_MOU) ${operator} ${value}"
+  },
+  {
+    "case": "E25",
+    "sentence": "Find customers whose total outgoing on-net call minutes in the last 30 days is above a given threshold.",
+    "expected": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(OG_Voice_Onnet_MOU) ${operator} ${value}"
+  },
+  {
+    "case": "E26",
+    "sentence": "Find customers whose total outgoing off-net call minutes in the last 30 days is above a given threshold.",
+    "expected": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(OG_Voice_Offnet_MOU) ${operator} ${value}"
+  },
+  {
+    "case": "E27",
+    "sentence": "Find customers whose total outgoing IDD call minutes in the last 30 days is above a given threshold.",
+    "expected": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(OG_Voice_Idd_MOU) ${operator} ${value}"
+  },
+  {
+    "case": "E28",
+    "sentence": "Find customers whose total outgoing roaming call minutes in the last 30 days is above a given threshold.",
+    "expected": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(OG_Voice_Roaming_MOU) ${operator} ${value}"
+  },
+  {
+    "case": "E29",
+    "sentence": "Find customers whose total data usage in the last 30 days is above a given threshold.",
+    "expected": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(Total_Data_Usage) ${operator} ${value}"
+  },
+  {
+    "case": "E30",
+    "sentence": "Find customers whose total outgoing on-net SMS revenue in the last 30 days is above a given threshold.",
+    "expected": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(OG_SMS_Onnet_Revenue) ${operator} ${value}"
+  },
+  {
+    "case": "E31",
+    "sentence": "Find customers whose total outgoing off-net SMS revenue in the last 30 days is above a given threshold.",
+    "expected": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(OG_SMS_Offnet_Revenue) ${operator} ${value}"
+  },
+  {
+    "case": "E32",
+    "sentence": "Find customers whose total outgoing IDD SMS revenue in the last 30 days is above a given threshold.",
+    "expected": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(OG_SMS_Idd_Revenue) ${operator} ${value}"
+  },
+  {
+    "case": "E33",
+    "sentence": "Find customers whose total total revenue yesterday is above a given threshold.",
+    "expected": "INSTFCTDATE = CurrentTime-1DAYS AND SUM(Total_Revenue) ${operator} ${value}"
+  },
+  {
+    "case": "E34",
+    "sentence": "Find customers whose total total revenue in the last 30 days is above a given threshold.",
+    "expected": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(Total_Revenue) ${operator} ${value}"
+  },
+  {
+    "case": "E35",
+    "sentence": "Find customers whose total total revenue this month is above a given threshold.",
+    "expected": "INSTFCTDATE = CurrentMonth AND SUM(Total_Revenue) ${operator} ${value}"
+  },
+  {
+    "case": "E36",
+    "sentence": "Find customers whose total data roaming usage in the last 30 days is above a given threshold.",
+    "expected": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(Data_Roaming_Usage) ${operator} ${value}"
+  },
+  {
+    "case": "E37",
+    "sentence": "Find customers whose total recharge count in the last 30 days is above a given threshold.",
+    "expected": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(Recharge_count) ${operator} ${value}"
+  },
+  {
+    "case": "E38",
+    "sentence": "Find customers whose total recharge count last month is above a given threshold.",
+    "expected": "INSTFCTDATE = CurrentMonth-1MONTHS AND SUM(Recharge_count) ${operator} ${value}"
+  },
+  {
+    "case": "E39",
+    "sentence": "Find customers whose average weekly recharge amount over the last 4 weeks is above a given threshold.",
+    "expected": "INSTFCTDATE >= CurrentWeek-4WEEKS AND INSTFCTDATE < CurrentWeek AND SUM(V{AVG_WEEKLY_RECHARGE_REV}=f{Recharge_revenue/4}) ${operator} ${value}"
+  },
+  {
+    "case": "E40",
+    "sentence": "Find customers whose average monthly recharge amount over the last 3 months is above a given threshold.",
+    "expected": "INSTFCTDATE >= CurrentMonth-3MONTHS AND INSTFCTDATE < CurrentMonth AND SUM(V{AVG_MONTHLY_RECHARGE_REV}=f{Recharge_revenue/3}) ${operator} ${value}"
+  },
+  {
+    "case": "E41",
+    "sentence": "Find customers whose total recharge amount last week is above a given threshold.",
+    "expected": "INSTFCTDATE = CurrentWeek-1WEEKS AND SUM(Recharge_revenue) ${operator} ${value}"
+  },
+  {
+    "case": "E42",
+    "sentence": "Find customers whose total recharge amount in the last 14 days is above a given threshold.",
+    "expected": "INSTFCTDATE >= CurrentTime-14DAYS AND INSTFCTDATE < CurrentTime AND SUM(Recharge_revenue) ${operator} ${value}"
+  },
+  {
+    "case": "E43",
+    "sentence": "Find customers whose total recharge amount in the last 30 days is above a given threshold.",
+    "expected": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(Recharge_revenue) ${operator} ${value}"
+  },
+  {
+    "case": "E44",
+    "sentence": "Find customers whose highest single recharge amount last week is above a given threshold.",
+    "expected": "INSTFCTDATE = CurrentWeek-1WEEKS AND Max(Recharge_revenue) ${operator} ${value}"
+  },
+  {
+    "case": "E45",
+    "sentence": "Find customers whose highest single recharge amount in the last 7 days is above a given threshold.",
+    "expected": "INSTFCTDATE >= CurrentTime-7DAYS AND INSTFCTDATE < CurrentTime AND Max(Recharge_revenue) ${operator} ${value}"
+  },
+  {
+    "case": "E46",
+    "sentence": "Find customers whose highest single recharge amount in the last 14 days is above a given threshold.",
+    "expected": "INSTFCTDATE >= CurrentTime-14DAYS AND INSTFCTDATE < CurrentTime AND Max(Recharge_revenue) ${operator} ${value}"
+  },
+  {
+    "case": "E47",
+    "sentence": "Find customers whose highest single recharge amount in the last 30 days is above a given threshold.",
+    "expected": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND Max(Recharge_revenue) ${operator} ${value}"
+  },
+  {
+    "case": "E48",
+    "sentence": "Find customers whose highest single recharge amount last month is above a given threshold.",
+    "expected": "INSTFCTDATE = CurrentMonth-1MONTHS AND Max(Recharge_revenue) ${operator} ${value}"
+  },
+  {
+    "case": "E49",
+    "sentence": "Find customers whose lowest single recharge amount last week is above a given threshold.",
+    "expected": "INSTFCTDATE = CurrentWeek-1WEEKS AND Min(Recharge_revenue) ${operator} ${value}"
+  },
+  {
+    "case": "E50",
+    "sentence": "Find customers whose lowest single recharge amount in the last 7 days is above a given threshold.",
+    "expected": "INSTFCTDATE >= CurrentTime-7DAYS AND INSTFCTDATE < CurrentTime AND Min(Recharge_revenue) ${operator} ${value}"
+  },
+  {
+    "case": "E51",
+    "sentence": "Find customers whose lowest single recharge amount in the last 14 days is above a given threshold.",
+    "expected": "INSTFCTDATE >= CurrentTime-14DAYS AND INSTFCTDATE < CurrentTime AND Min(Recharge_revenue) ${operator} ${value}"
+  },
+  {
+    "case": "E52",
+    "sentence": "Find customers whose lowest single recharge amount in the last 30 days is above a given threshold.",
+    "expected": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND Min(Recharge_revenue) ${operator} ${value}"
+  },
+  {
+    "case": "E53",
+    "sentence": "Find customers whose lowest single recharge amount last month is above a given threshold.",
+    "expected": "INSTFCTDATE = CurrentMonth-1MONTHS AND Min(Recharge_revenue) ${operator} ${value}"
+  },
+  {
+    "case": "E54",
+    "sentence": "Find customers based on the date of their most recent recharge amount activity within the last 90 days.",
+    "expected": "INSTFCTDATE >= CurrentTime-90DAYS AND INSTFCTDATE < CurrentTime AND Recharge_revenue > 0 AND Max(INSTFCTDATE) ${operator} ${value}"
+  },
+  {
+    "case": "E55",
+    "sentence": "Find customers whose total outgoing SMS count in the last 30 days is above a given threshold.",
+    "expected": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(OG_Total_SMS_count) ${operator} ${value}"
+  },
+  {
+    "case": "E56",
+    "sentence": "Find customers whose total outgoing on-net SMS count in the last 30 days is above a given threshold.",
+    "expected": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(OG_SMS_Onnet_count) ${operator} ${value}"
+  },
+  {
+    "case": "E57",
+    "sentence": "Find customers whose total outgoing off-net SMS count in the last 30 days is above a given threshold.",
+    "expected": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(OG_SMS_Offnet_count) ${operator} ${value}"
+  },
+  {
+    "case": "E58",
+    "sentence": "Find customers whose total outgoing IDD SMS count in the last 30 days is above a given threshold.",
+    "expected": "INSTFCTDATE >= CurrentTime-30DAYS AND INSTFCTDATE < CurrentTime AND SUM(OG_SMS_Idd_count) ${operator} ${value}"
+  },
+  {
+    "case": "E59",
+    "sentence": "Find customers in a specified segment who received a promotion in the last X days.",
+    "expected": "L_SENT_DATE >= CurrentTime-${X}DAYS AND L_SEGMENT_NAME ${operator} ${value} AND L_ACTION_TYPE IN LIST (Promotion;PROMOTION;promotion) AND COUNT_ALL(L_MSISDN) > 0"
+  },
+  {
+    "case": "E60",
+    "sentence": "Find customers in a specified segment who received a bonus in the last X days.",
+    "expected": "L_SENT_DATE >= CurrentTime-${X}DAYS AND L_SEGMENT_NAME ${operator} ${value} AND L_ACTION_TYPE IN LIST (BONUS;Bonus;bonus) AND COUNT_ALL(L_MSISDN) > 0"
+  },
+  {
+    "case": "E61",
+    "sentence": "Find customers in a specified segment who did not receive a promotion in the last X days.",
+    "expected": "L_SENT_DATE >= CurrentTime-${X}DAYS AND L_SEGMENT_NAME ${operator} ${value} AND L_ACTION_TYPE IN LIST (Promotion;PROMOTION;promotion) AND COUNT_ALL(L_MSISDN) = 0"
+  },
+  {
+    "case": "E62",
+    "sentence": "Find customers in a specified segment who did not receive a bonus in the last X days.",
+    "expected": "L_SENT_DATE >= CurrentTime-${X}DAYS AND L_SEGMENT_NAME ${operator} ${value} AND L_ACTION_TYPE IN LIST (BONUS;Bonus;bonus) AND COUNT_ALL(L_MSISDN) = 0"
+  }
+]

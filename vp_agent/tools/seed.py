@@ -33,6 +33,9 @@ TEMPLATE_VAR_ONLY_RE = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
 # resolve to the metric column.
 IDENTIFIER_ROLES = frozenset({"key_col", "grp_col", "id_col"})
 COLUMN_ROLES = frozenset({"kpi_col", "count_col", "col"}) | IDENTIFIER_ROLES
+# kpi_col wants a numeric so it never competes; the identifier roles carry
+# `${operator} ${value}` and must win the scarce string before count_col.
+ROLE_FILL_ORDER = ("kpi_col", "key_col", "grp_col", "id_col", "count_col", "col")
 
 # Every template variable the resolver fills itself.
 RESOLVER_FILLED_ROLES = COLUMN_ROLES | frozenset(
@@ -101,6 +104,17 @@ def normalize_time_token(raw: object) -> dict[str, Any]:
     if unit_code == "w":
         return {"raw": token, "required": True, "unit": "WEEKS", "n": n, "axis_keys": [f"w{n}", f"{n}w"]}
     return {"raw": token, "required": True, "unit": "MONTHS", "n": n, "axis_keys": [f"m{n}", f"{n}m"]}
+
+
+def seed_template_by_id(seed_id: str) -> str:
+    """The reviewed skeleton behind a seed id, for checking what the rule kept."""
+    wanted = str(seed_id or "").strip()
+    if not wanted:
+        return ""
+    for seed in load_seed_catalog().get("seeds", []):
+        if str(seed.get("seed_id") or "").strip() == wanted:
+            return str(seed.get("output_template") or "")
+    return ""
 
 
 def _seed_client_ok(seed_client: str, client: str) -> bool:
@@ -273,11 +287,25 @@ def _intent_score(
     return score, reasons
 
 
+def _role_usage(client: str) -> dict[str, dict[str, int]]:
+    from vp_agent.tools.retrieval_index import client_role_usage
+
+    return client_role_usage(client)
+
+
+def _kpi_meta_types() -> dict[str, str]:
+    from vp_agent.data import load_kpi_meta
+
+    return {row.feature_name: (row.data_type or "").strip().lower() for row in load_kpi_meta()}
+
+
 def _infer_column(
     columns: list[dict[str, Any]],
     role: str,
     table: str | None = None,
     slots: dict[str, Any] | None = None,
+    taken: set[str] | None = None,
+    _client_hint: str = "",
 ) -> str | None:
     if role in COLUMN_ROLES:
         in_table = [
@@ -286,26 +314,110 @@ def _infer_column(
             if not (table and table != "360_PROFILE" and column.get("group_name") != table)
         ]
         pool = in_table or columns
+        # Distinct placeholders are distinct jobs. `{key_col}` selects and groups,
+        # `{count_col}` is counted; filling both from the same column produced
+        # `COUNT_ALL(L_AGG_MSISDN)__groupby_L_AGG_MSISDN`, a shape that appears in
+        # none of the 713 production VPs. Leaving the later role unfilled is
+        # better: a missing variable is reported as an adaptation the agent can
+        # see, while a duplicate is silent and wrong.
+        if taken:
+            pool = [column for column in pool if column.get("feature_name") not in taken] or []
         if not pool:
             return None
 
+        def _data_type(column: dict[str, Any]) -> str:
+            # The agent passes columns as {feature_name, group_name}, with no
+            # data_type, so every type preference below silently matched nothing
+            # and the role fell through to "first in the list". kpi_meta knows
+            # the type; look it up rather than trusting the caller to send it.
+            declared = str(column.get("data_type") or "").lower()
+            if declared:
+                return declared
+            return _kpi_meta_types().get(str(column.get("feature_name") or ""), "")
+
         def _first(predicate) -> str | None:
             return next(
-                (
-                    column.get("feature_name")
-                    for column in pool
-                    if predicate(str(column.get("data_type", "")).lower())
-                ),
+                (column.get("feature_name") for column in pool if predicate(_data_type(column))),
                 None,
             )
+
+        def _by_production_role(role_name: str) -> str | None:
+            """Pick the candidate production most often uses in this exact role.
+
+            Type alone cannot separate two string identifiers, so the choice fell
+            to list order: `L_AGG_MSISDN` and `L_ACTION_KEY` are both strings, but
+            production counts the first 50 times and never makes it the runtime
+            selector, while the second carries the pair 34 times. Where the client
+            has an opinion, follow it; otherwise fall through to the type rules.
+            """
+            client = str((slots or {}).get("client") or "") or _client_hint
+            if not client:
+                return None
+            counts = _role_usage(client).get(role_name, {})
+            ranked = [
+                (counts.get(str(column.get("feature_name")), 0), str(column.get("feature_name")))
+                for column in pool
+            ]
+            best = max(ranked, default=(0, ""))
+            return best[1] if best[0] > 0 else None
 
         if role == "kpi_col":
             # A measured quantity is numeric.
             return _first(lambda data_type: data_type == "numeric") or pool[0].get("feature_name")
+        if role == "count_col":
+            chosen = _by_production_role("aggregated")
+            if chosen:
+                return chosen
+            # COUNT_ALL is applied to a string identifier in every one of the 170
+            # production usages and to a categorical column in none of them.
+            # When the pool holds no such column, leave the role unfilled rather
+            # than emit something validate_rule now rejects outright: a missing
+            # variable surfaces as an adaptation the agent can act on, a bad one
+            # substitutes silently.
+            return _first(lambda data_type: data_type == "string") or _first(
+                lambda data_type: data_type not in {"numeric", "categorical", "date", ""}
+            )
         if role in IDENTIFIER_ROLES:
+            # A date belongs in `date_col`. Production groups by `L_SENT_DATE` in
+            # one rule, which was enough for the groupby preference below to hand
+            # a date column back as the selector. One rule in 713 puts the pair on
+            # a date (`COMMON_Event_Date`, a runtime window rather than a
+            # selector), so excluding dates here costs nothing real.
+            pool = [column for column in pool if _data_type(column) != "date"]
+            if not pool:
+                return None
+            chosen = _by_production_role("pair_owner") or _by_production_role("groupby")
+            if chosen:
+                return chosen
+            # No candidate is a known selector, so fall back on type — but not
+            # onto a column whose job in production is to BE counted.
+            # `L_AGG_MSISDN` is counted 50 times and carries the runtime pair
+            # zero times; letting it fill `{key_col}` put the metric in the
+            # selector slot and left the count slot empty.
+            client = str((slots or {}).get("client") or "") or _client_hint
+            if client:
+                usage = _role_usage(client)
+                pool = [
+                    column
+                    for column in pool
+                    if usage.get("aggregated", {}).get(str(column.get("feature_name")), 0)
+                    <= usage.get("pair_owner", {}).get(str(column.get("feature_name")), 0)
+                ]
+                if not pool:
+                    return None
             # A grouping/membership key is an identifier, not the measure. Taking
             # the first column here used to hand back the metric itself.
-            return _first(lambda data_type: data_type != "numeric") or pool[0].get("feature_name")
+            # Among identifiers, prefer a string: the column carrying
+            # `${operator} ${value}` across the 713 production VPs is string 93
+            # times and categorical zero times, because a runtime selector picks
+            # one entity and a category names a class.
+            # Same reasoning as count_col: a date belongs in `date_col`, and one
+            # run put `L_SENT_DATE` in the selector slot because the configured
+            # date column came from elsewhere and never marked it taken. An
+            # unfilled slot is recoverable; a wrong one is not.
+            return _first(lambda data_type: data_type == "string") or _first(
+                lambda data_type: data_type not in {"numeric", "categorical", "date", ""}
+            )
         return pool[0].get("feature_name")
 
     if role == "date_col":
@@ -365,6 +477,7 @@ def _suggest_variables(
     table: str | None,
     normalized_time: dict[str, Any],
     slots: dict[str, Any],
+    client_hint: str = "",
 ) -> dict[str, Any]:
     variables: dict[str, Any] = {}
     for key in ("N", "start", "end", "divisor"):
@@ -382,11 +495,18 @@ def _suggest_variables(
     if "divisor" in required_variables and "divisor" not in variables and normalized_time.get("n") is not None:
         variables["divisor"] = normalized_time["n"]
 
-    for role in (*sorted(COLUMN_ROLES), "date_col"):
+    taken: set[str] = set()
+    # Assign in order of how constrained the role is, not alphabetically. Sorted
+    # order put `count_col` before `key_col`, so the only string identifier was
+    # consumed by the count and the selector was left with a categorical — the
+    # reverse of what the rule needs.
+    for role in (*ROLE_FILL_ORDER, "date_col"):
         if role in required_variables:
-            inferred = _infer_column(columns, role, table, slots)
+            inferred = _infer_column(columns, role, table, slots, taken, client_hint)
             if inferred:
                 variables[role] = inferred
+                if role in COLUMN_ROLES:
+                    taken.add(inferred)
 
     formula_slots = slots.get("formula") if isinstance(slots.get("formula"), dict) else {}
     if "factor" in required_variables:
@@ -492,7 +612,16 @@ def _seed_compatibility_failures(
                 f"request is {requested_window} — re-parameterise the window"
             )
     elif seed_requires_time:
-        failures.append("time_window_not_requested")
+        # Demote, never delete. The request's time token comes from an earlier
+        # step that can be wrong, and deleting a seed here also deletes the
+        # agent's chance to notice: `S86_parameterized_bonus_sent` matched the
+        # request's own phrase ("bonus less than N times in last X days") and was
+        # dropped because the window had been parsed as absent.
+        adaptations.append(
+            f"time_window_not_requested: seed window is {_seed_window_text(seed)}; the request "
+            "carries no period. If the request does scope a window, the extracted time token is "
+            "the more likely error."
+        )
 
     if normalized_time.get("till_date") and time.get("has_completed_period_upper_bound"):
         adaptations.append("till_date_adaptation: drop the completed-period upper bound")
@@ -650,7 +779,9 @@ def build_seed_audit(
         if composition.get("can_be_main_condition") is False:
             score -= 8
 
-        suggested = _suggest_variables(seed, required_variables, axis_values, columns, table, normalized_time, slots)
+        suggested = _suggest_variables(
+            seed, required_variables, axis_values, columns, table, normalized_time, slots, client
+        )
         missing = sorted(v for v in required_variables if v not in suggested)
         if missing:
             score -= min(12, len(missing) * 3)
@@ -714,6 +845,41 @@ def build_seed_audit(
     }
 
 
+def _selector_hint(selected: dict[str, Any], client: str) -> dict[str, Any]:
+    """Name the selector the client normally pairs with this counted column.
+
+    An unfilled `{key_col}` is honest but leaves the agent with nowhere to put
+    `${operator} ${value}`, and the fallback — the aggregate — evicts the literal
+    the request stated. The client's own rules answer it: every production rule
+    counting `L_AGG_MSISDN` pairs it with `L_ACTION_KEY` or `LC_SEGMENT_NAME`.
+    """
+    from vp_agent.tools.retrieval_index import client_selector_for_counted
+
+    variables = selected.get("suggested_variables") or {}
+    required = selected.get("required_variables") or ()
+    identifier_gaps = [role for role in IDENTIFIER_ROLES if role in required and role not in variables]
+    counted = variables.get("count_col") or variables.get("kpi_col")
+    if not identifier_gaps or not counted:
+        return {}
+    options = client_selector_for_counted(client).get(str(counted)) or ()
+    if not options:
+        return {}
+    return {
+        "selector_hint": {
+            "unfilled_roles": sorted(identifier_gaps),
+            "counted_column": str(counted),
+            "production_selectors": [{"column": name, "rules": count} for name, count in options],
+            "note": (
+                f"No supplied column is a selector, so {', '.join(sorted(identifier_gaps))} is "
+                f"unfilled. Production rules counting {counted} put ${{operator}} ${{value}} on "
+                + " or ".join(f"{name} ({count} rules)" for name, count in options)
+                + ". Retrieve one of those and use it, so the stated threshold can stay a literal "
+                "on the aggregate."
+            ),
+        }
+    }
+
+
 def _supply_diagnostics(candidates: list[dict[str, Any]], eligible: list[dict[str, Any]]) -> dict[str, Any]:
     """Report how much of the catalog actually reached the agent.
 
@@ -767,6 +933,7 @@ def compact_seed_selection(audit: dict[str, Any], *, audit_id: str) -> dict[str,
         for key, value in selected.items()
         if key not in {"eligible", "gate_failures", "structural_fingerprint"}
     }
+    selected_response.update(_selector_hint(selected, str(audit.get("client") or "")))
     alternatives: list[dict[str, Any]] = []
     seen_structures = {selected["structural_fingerprint"]}
     for candidate in eligible[1:]:

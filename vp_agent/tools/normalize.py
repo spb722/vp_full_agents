@@ -40,6 +40,15 @@ def _find_value(text: str, operator_phrase: str | None) -> str:
     return ""
 
 
+PARAMETERIZED_WINDOW_RE = re.compile(
+    r"\b(?:a\s+)?(?:specified|configurable|given|parameter(?:ised|ized)|variable)\s+"
+    r"(?:number\s+of\s+)?(?:days?|weeks?|months?|hours?)\b"
+    r"|\blast\s+[XN]\s+(?:days?|weeks?|months?|hours?)\b"
+    r"|\b[XN]\s+(?:days?|weeks?|months?|hours?)\b",
+    re.I,
+)
+
+
 def _find_time_token(text: str) -> str:
     explicit = re.search(r"\bM([1-9]|1[0-2])\b", text, re.I)
     if explicit:
@@ -69,6 +78,13 @@ def _find_time_token(text: str) -> str:
         return "M1"
     if re.search(r"\b(month before last)\b", text, re.I):
         return "M2"
+    # A window whose SIZE is supplied at runtime is not an absent window. "a
+    # specified number of days", "in the last X days", "configurable days" all
+    # mean CurrentTime-${...}DAYS. Reporting "none" made the seed gate delete
+    # `S86_parameterized_bonus_sent` — the exact template for the request —
+    # because the seed declares a window the request appeared not to want.
+    if PARAMETERIZED_WINDOW_RE.search(text):
+        return "PARAM"
     return "none"
 
 

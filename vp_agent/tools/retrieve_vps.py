@@ -7,6 +7,24 @@ from vp_agent.text import tokens
 from vp_agent.tools.retrieval_index import char_ngrams, cosine, expand_tokens
 
 
+def _compound_variants(raw_tokens: list[str]) -> set[str]:
+    """Bridge marketer spacing to catalog naming.
+
+    VP names concatenate what a request separates — `LC_NONRESPONDER_LAST_4_DAYS`
+    and `..._ACTIONKEY_...` against "non-responders" and "action key" — so the
+    words a marketer writes are never lexically equal to the single name token
+    that means the same thing. Joining adjacent pairs, plus their singular form,
+    restores the match. The extra terms enlarge the coverage denominator equally
+    for every candidate, so ranking only moves where a compound actually hits.
+    """
+    variants: set[str] = set()
+    for left, right in zip(raw_tokens, raw_tokens[1:]):
+        joined = f"{left}{right}"
+        variants.add(joined)
+        variants.add(joined.rstrip("s"))
+    return variants
+
+
 def retrieve_existing_vps(
     query: str,
     client: str,
@@ -16,7 +34,8 @@ def retrieve_existing_vps(
     """Return ranked existing VP evidence without deciding semantic validity."""
 
     query_text = str(query or "").strip()
-    query_terms = set(expand_tokens(tokens(query_text)))
+    raw_terms = tokens(query_text)
+    query_terms = set(expand_tokens(raw_terms)) | _compound_variants(raw_terms)
     query_vector = char_ngrams(query_text)
     excluded = {str(value).strip().lower() for value in (exclude or [])}
     ranked: list[dict[str, Any]] = []

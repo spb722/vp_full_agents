@@ -67,6 +67,19 @@ Agentic emission is the only path. Build every rule like this:
    IDD, onnet/offnet, roaming, bundle/PAYG/free, or a fixed specialty period.
    In that situation expand the role; never settle for a narrower proxy while
    has-more evidence is available.
+   Candidates carry `observed_values`: the literal values production rules have
+   compared that column against, with their original spelling. Treat them as the
+   legal values when kpi_meta records none, and match the spelling exactly. When
+   the same value appears in several casings, render a membership list covering
+   every spelling rather than a single equality — a one-case equality matches
+   only the rows written that way and silently under-selects.
+   Candidates carry `production_uses`: how many of this client's production VPs
+   use that column. Metadata sometimes cannot separate two candidates at all —
+   `L_AGG_MSISDN` and `L_AGG_CNT` share a description word for word — and there
+   the usage count is the deciding evidence. When two candidates are
+   interchangeable on description and type, prefer the one production actually
+   uses, and say so; a lexical echo of your KPI phrase in the column name is the
+   weaker signal.
    Candidates carry `adaptations`: reasons a column does not cleanly fit, such
    as `snapshot_period_mismatch` or `period_snapshot_without_requested_period`.
    Adapted candidates always rank below clean ones but stay visible on purpose.
@@ -102,6 +115,18 @@ Agentic emission is the only path. Build every rule like this:
    whether a 360 snapshot matches a period the user actually stated or the KPI
    must be aggregated raw; the aggregate (SUM, COUNT_ALL, AVG, MAX, or FORMULA);
    any date bounds; and ordering (filters first, aggregate last).
+   When locking the main KPI, match the KIND OF MEASURE the request asks for to
+   what the candidate actually measures. Read the request for its measure type
+   (for example money/charges, volume/usage, count/events, status/flag, or
+   another stated measure) and check each candidate's description and
+   value_type/data_type. Prefer a column that matches both the business scope
+   and the measure type. A nearby column that shares scope, service, or wording
+   but answers a different measure question is the wrong KPI — do not silently
+   substitute it. If no retrieved candidate matches both, expand the metric role
+   once when allowed, then ask one plain-English clarification rather than
+   emitting a wrong-measure rule. Do not treat shared vocabulary in a
+   description (for example the word "usage" inside a revenue description) as
+   proof the measure types match.
    Decide the window's MEANING from the whole sentence, not the phrase alone: a
    window anchored to the present ("last week from today", "the last 7 days") is
    rolling and renders CurrentTime-NDAYS, while a bare completed period ("last
@@ -166,6 +191,14 @@ user did not provide a numeric threshold. Mention that the runtime operator/valu
 can later be set to a presence threshold such as `> 0` if that is the intended
 audience.
 
+A named attribute with no stated value is not a clarification either. "based on
+segment name", "for a particular promotion", "by tariff plan" each name a column
+and leave its value to the marketer, which is what `${operator} ${value}` is for.
+Send it to retrieve_columns as a filter predicate with `"operator": "runtime"`
+and `"value": null`, then render it as `COLUMN ${operator} ${value}`. "Based on
+X" selects on X; it is neither a group_by nor a reason to return everyone. Never
+report that a column does not exist for a role you did not submit to retrieval.
+
 Values stated in the request for non-main KPIs are fixed filters, not the final
 VP threshold. For example, "recharged more than 100" and "roaming revenue at
 least 5000 last month" must become fixed predicates, while the main profiled KPI
@@ -173,6 +206,19 @@ keeps `${operator} ${value}`. Do not ask clarification for a missing filter
 period before retrieval. First retrieve candidate columns and use clear
 Customer 360/profile snapshots, golden examples, or production defaults. Ask only
 if no safe default exists or multiple periods remain equally plausible.
+
+Separate a DATA question from an INTENT question, because only the second is a
+clarification. "Does this system record X?", "which column holds X?", "what does
+term X mean here?" are data questions, and the tools answer them: retrieve_columns
+for a column, retrieve_existing_vps for a term the client's own rules may already
+define. "Which of two audiences the data supports equally well did the marketer
+mean?" is an intent question, and only the user answers it.
+
+You therefore may not ask anything before you have called retrieve_columns. If
+the request uses a domain term you cannot map to a column, call
+retrieve_existing_vps with that term first — client VP names encode the client's
+vocabulary, so a term that sounds ambiguous in isolation is often a defined
+family there. Never state that the data lacks something you did not look for.
 
 Ambiguous business labels are clarification cases. In particular, do not assume
 "high value customer" means `VALUE_SEGMENT_OVERALL = HIGH` unless the user says
@@ -267,6 +313,13 @@ def build_options(
             "preset": "claude_code",
             "append": ORCHESTRATOR_APPEND,
         },
+        # `allowed_tools` only governs auto-approval; leaving `tools` unset
+        # loaded the entire Claude Code built-in set, and with the 12 vp MCP
+        # tools on top the CLI deferred all 31 schemas behind ToolSearch. That
+        # indirection bought nothing here — the pipeline needs three built-ins —
+        # and it cost one run its whole result. Narrowing the base set is what
+        # keeps the vp tools directly callable.
+        tools=["Skill", "Read", "Agent"],
         allowed_tools=[
             "Skill",
             "Read",
@@ -303,6 +356,12 @@ async def run_request(
     stderr_callback: Callable[[str], None] | None = None,
 ) -> AsyncIterator[object]:
     from claude_agent_sdk import ClaudeSDKClient
+
+    # Hooks validate and audit against the original sentence; without this they
+    # only ever saw whatever the agent chose to echo back into a tool argument.
+    if state is not None:
+        state.request = request
+        state.client = client
 
     prompt = f"""Client: {client}
 

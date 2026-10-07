@@ -1,0 +1,610 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VP Agent Architecture</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Sans+Condensed:wght@600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+  :root{
+    --ink:#181b16; --paper:#eff1ec; --panel:#ffffff; --panel-2:#e7e9e1; --line:#d9dbd1; --mute:#5c6259;
+    --accent:#c1560e; --accent-ink:#7a3608;
+    --ok:#2f7a52; --ok-bg:#e4efe8;
+    --warn:#a6790a; --warn-bg:#f3ecd8;
+    --danger:#b23a2e; --danger-bg:#f5e3e0;
+    --font-body:'IBM Plex Sans', -apple-system, 'Segoe UI', sans-serif;
+    --font-cond:'IBM Plex Sans Condensed','IBM Plex Sans', sans-serif;
+    --font-mono:'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+    --radius: 3px;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --ink:#ecefe6; --paper:#14161a; --panel:#1b1e1a; --panel-2:#20241f; --line:#2b2f27; --mute:#9aa093;
+      --accent:#e08a3c; --accent-ink:#f2b675;
+      --ok:#4fae7c; --ok-bg:#193226;
+      --warn:#d9b93b; --warn-bg:#332a12;
+      --danger:#e06a5b; --danger-bg:#3a1f1a;
+    }
+  }
+  :root[data-theme="dark"]{
+    --ink:#ecefe6; --paper:#14161a; --panel:#1b1e1a; --panel-2:#20241f; --line:#2b2f27; --mute:#9aa093;
+    --accent:#e08a3c; --accent-ink:#f2b675;
+    --ok:#4fae7c; --ok-bg:#193226;
+    --warn:#d9b93b; --warn-bg:#332a12;
+    --danger:#e06a5b; --danger-bg:#3a1f1a;
+  }
+
+  *{box-sizing:border-box;}
+  html, body{height:auto;}
+  body{
+    margin:0; background:var(--paper); color:var(--ink); font-family:var(--font-body);
+    font-size:16px; line-height:1.6; -webkit-font-smoothing:antialiased;
+  }
+  h1,h2,h3,h4{font-family:var(--font-body); font-weight:700; text-wrap:balance; margin:0;}
+  p{margin:0 0 1em; max-width:68ch;}
+  a{color:var(--accent-ink); text-decoration-color:var(--line); text-underline-offset:3px;}
+  a:hover{text-decoration-color:currentColor;}
+  code, .mono{font-family:var(--font-mono);}
+  code{
+    background:var(--panel-2); border:1px solid var(--line); border-radius:var(--radius);
+    padding:.1em .35em; font-size:.88em;
+  }
+  pre{
+    background:var(--panel-2); border:1px solid var(--line); border-radius:6px;
+    padding:16px; overflow-x:auto; font-family:var(--font-mono); font-size:.85em; line-height:1.55;
+  }
+  pre code{background:none; border:none; padding:0;}
+  hr{border:none; border-top:1px solid var(--line); margin:2.5em 0;}
+
+  .skip{position:absolute; left:-9999px;}
+  .skip:focus{left:16px; top:16px; z-index:100; background:var(--accent); color:#fff; padding:8px 14px; border-radius:4px;}
+  :focus-visible{outline:2px solid var(--accent); outline-offset:2px;}
+
+  /* ---- cover ---- */
+  .cover{
+    padding-block: 56px 40px; padding-inline: max(20px, calc((100% - 1180px)/2 + 20px));
+    border-bottom:1px solid var(--line);
+  }
+  .eyebrow{
+    font-family:var(--font-cond); font-weight:700; letter-spacing:.14em; text-transform:uppercase;
+    font-size:.78rem; color:var(--accent-ink); display:flex; align-items:center; gap:.6em; margin-bottom:.9em;
+  }
+  .eyebrow::before{content:""; width:22px; height:2px; background:var(--accent); display:inline-block;}
+  .cover h1{font-size:clamp(2.1rem, 4.2vw, 3.1rem); letter-spacing:-.01em;}
+  .cover .dek{font-size:1.1rem; color:var(--mute); max-width:62ch; margin-top:.7em;}
+  .meta-row{
+    display:flex; flex-wrap:wrap; gap:.5em 1.4em; margin-top:1.4em; font-family:var(--font-mono);
+    font-size:.8rem; color:var(--mute);
+  }
+  .meta-row b{color:var(--ink); font-weight:600;}
+
+  .stats{
+    display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:1px; background:var(--line);
+    border:1px solid var(--line); border-radius:6px; overflow:hidden; margin-top:2em; max-width:920px;
+  }
+  .stat{background:var(--panel); padding:14px 16px;}
+  .stat .n{font-family:var(--font-mono); font-variant-numeric:tabular-nums; font-size:1.6rem; font-weight:600; color:var(--accent-ink);}
+  .stat .l{font-family:var(--font-cond); font-size:.72rem; letter-spacing:.07em; text-transform:uppercase; color:var(--mute); margin-top:.15em;}
+
+  /* ---- page grid ---- */
+  .page{
+    display:grid; grid-template-columns:220px minmax(0,1fr); gap:48px;
+    max-width:1180px; margin:0 auto; padding-inline: 20px; padding-block: 40px 80px;
+  }
+  nav.toc{align-self:start; position:sticky; top:calc(env(safe-area-inset-top,0px) + 24px); max-height:calc(100vh - 48px); overflow-y:auto;}
+  nav.toc .toc-title{font-family:var(--font-cond); font-size:.72rem; letter-spacing:.1em; text-transform:uppercase; color:var(--mute); margin-bottom:.8em;}
+  nav.toc ol{list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:.45em; counter-reset:toc;}
+  nav.toc li{counter-increment:toc;}
+  nav.toc a{
+    display:flex; gap:.6em; font-size:.86rem; color:var(--ink); text-decoration:none; line-height:1.35;
+  }
+  nav.toc a::before{
+    content:counter(toc,decimal-leading-zero); font-family:var(--font-mono); font-size:.78rem; color:var(--mute);
+    flex:none;
+  }
+  nav.toc a:hover{color:var(--accent-ink);}
+
+  main{min-width:0;}
+  section{margin-bottom:3.2em; scroll-margin-top:24px;}
+  .sec-head{display:flex; align-items:baseline; gap:.8em; margin-bottom:1.1em; border-bottom:1px solid var(--line); padding-bottom:.6em;}
+  .sec-head .num{font-family:var(--font-mono); color:var(--accent-ink); font-size:1rem; font-weight:600;}
+  .sec-head h2{font-size:1.5rem;}
+  h3{font-size:1.08rem; margin:1.6em 0 .6em;}
+  .lede{color:var(--mute); font-size:1.02rem; margin-bottom:1.2em;}
+
+  /* ---- tables ---- */
+  .table-wrap{overflow-x:auto; border:1px solid var(--line); border-radius:6px; margin:1em 0 1.6em;}
+  table{border-collapse:collapse; width:100%; min-width:560px; font-size:.9rem;}
+  caption{caption-side:top; text-align:left; font-family:var(--font-cond); font-size:.75rem; letter-spacing:.06em; text-transform:uppercase; color:var(--mute); padding:10px 14px; border-bottom:1px solid var(--line); background:var(--panel-2);}
+  th, td{text-align:left; padding:10px 14px; border-bottom:1px solid var(--line); vertical-align:top;}
+  thead th{background:var(--panel-2); font-family:var(--font-cond); font-size:.72rem; letter-spacing:.06em; text-transform:uppercase; color:var(--mute); font-weight:700;}
+  tbody tr:last-child td{border-bottom:none;}
+  tbody tr:hover{background:var(--panel-2);}
+  td code, th code{white-space:nowrap;}
+  .row-accent td:first-child{border-left:3px solid var(--accent); padding-left:11px;}
+
+  /* ---- glossary ---- */
+  dl.glossary{display:grid; grid-template-columns:1fr; gap:0; border-top:1px solid var(--line);}
+  dl.glossary div{display:grid; grid-template-columns:170px minmax(0,1fr); gap:1.4em; padding:12px 0; border-bottom:1px solid var(--line);}
+  dl.glossary dt{font-family:var(--font-mono); font-weight:600; font-size:.88rem; color:var(--accent-ink);}
+  dl.glossary dd{margin:0; color:var(--ink); font-size:.93rem;}
+  @media (max-width:640px){ dl.glossary div{grid-template-columns:1fr; gap:.2em;} }
+
+  /* ---- callouts ---- */
+  .callout{border:1px solid var(--line); border-left:3px solid var(--accent); border-radius:0 6px 6px 0; padding:14px 18px; background:var(--panel); margin:1.2em 0;}
+  .callout.warn{border-left-color:var(--warn); }
+  .callout.danger{border-left-color:var(--danger);}
+  .callout .label{font-family:var(--font-cond); font-size:.72rem; letter-spacing:.08em; text-transform:uppercase; color:var(--mute); margin-bottom:.4em;}
+  .callout p:last-child{margin-bottom:0;}
+
+  .invariants{list-style:none; margin:0 0 1.4em; padding:0; display:flex; flex-direction:column; gap:10px;}
+  .invariants li{
+    display:grid; grid-template-columns:34px 1fr; gap:14px; align-items:start;
+    background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:12px 16px;
+  }
+  .invariants .idx{font-family:var(--font-mono); font-weight:700; color:var(--accent-ink); font-size:1.1rem;}
+
+  /* pills */
+  .pill{
+    display:inline-flex; align-items:center; gap:.4em; font-family:var(--font-mono); font-size:.72rem;
+    font-weight:600; letter-spacing:.02em; padding:2px 9px; border-radius:100px; white-space:nowrap;
+  }
+  .pill::before{content:""; width:6px; height:6px; border-radius:50%; background:currentColor;}
+  .pill.ok{background:var(--ok-bg); color:var(--ok);}
+  .pill.warn{background:var(--warn-bg); color:var(--warn);}
+  .pill.danger{background:var(--danger-bg); color:var(--danger);}
+  .pill.neutral{background:var(--panel-2); color:var(--mute);}
+
+  /* hook cards */
+  .hooks{display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:14px; margin:1.2em 0 1.6em;}
+  .hook-card{border:1px solid var(--line); border-radius:6px; padding:16px; background:var(--panel);}
+  .hook-card h4{font-family:var(--font-mono); font-size:.95rem; margin:0 0 .5em; display:flex; align-items:center; justify-content:space-between; gap:.6em;}
+  .hook-card ul{margin:0; padding-left:1.1em; font-size:.87rem; color:var(--ink);}
+  .hook-card li{margin-bottom:.4em;}
+
+  /* steps */
+  ol.steps{list-style:none; margin:0; padding:0; counter-reset:step; display:flex; flex-direction:column;}
+  ol.steps li{
+    counter-increment:step; position:relative; padding:0 0 1.1em 40px; border-left:1px solid var(--line); margin-left:13px;
+  }
+  ol.steps li:last-child{border-left-color:transparent; padding-bottom:0;}
+  ol.steps li::before{
+    content:counter(step); position:absolute; left:-13px; top:0; width:26px; height:26px; border-radius:50%;
+    background:var(--panel); border:1px solid var(--accent); color:var(--accent-ink); font-family:var(--font-mono);
+    font-size:.75rem; font-weight:700; display:flex; align-items:center; justify-content:center;
+  }
+  ol.steps b{font-family:var(--font-mono); font-weight:600; font-size:.92rem;}
+
+  pre.mermaid{background:var(--panel); padding:20px; overflow-x:auto;}
+  .mermaid svg{max-width:100%;}
+
+  footer{
+    padding-inline: max(20px, calc((100% - 1180px)/2 + 20px)); padding-block: 28px 40px;
+    border-top:1px solid var(--line); color:var(--mute); font-size:.82rem; font-family:var(--font-mono);
+  }
+
+  @media (max-width:980px){
+    .page{grid-template-columns:1fr;}
+    nav.toc{position:static; max-height:none; order:-1; border:1px solid var(--line); border-radius:6px; padding:14px 16px; background:var(--panel);}
+    .stats{grid-template-columns:repeat(2,minmax(0,1fr));}
+  }
+</style>
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<div class="cover">
+  <div class="eyebrow">Internal reference · vp_agent_codex</div>
+  <h1>VP Agent — Architecture</h1>
+  <p class="dek">How a marketer's sentence becomes a validated <code>PARENT_CONDITION</code>: the harnesses that run the pipeline, the skills that carry its judgment, and the hooks that keep both honest.</p>
+  <div class="meta-row">
+    <span><b>Repo</b> vp_agent_codex</span>
+    <span><b>Clients</b> omantel · airtel</span>
+    <span><b>Companion docs</b> AGENTS.md · .claude/CLAUDE.md</span>
+    <span><b>Updated</b> 2026-09-15</span>
+  </div>
+  <div class="stats">
+    <div class="stat"><div class="n">1</div><div class="l">Live harness</div></div>
+    <div class="stat"><div class="n">3</div><div class="l">Eval harnesses</div></div>
+    <div class="stat"><div class="n">7</div><div class="l">Skills</div></div>
+    <div class="stat"><div class="n">12</div><div class="l">MCP tools</div></div>
+    <div class="stat"><div class="n">25</div><div class="l">Max turns</div></div>
+  </div>
+</div>
+
+<div class="page">
+  <nav class="toc" aria-label="Table of contents">
+    <div class="toc-title">Contents</div>
+    <ol>
+      <li><a href="#what">What the agent does</a></li>
+      <li><a href="#glossary">Glossary</a></li>
+      <li><a href="#harnesses">Harnesses</a></li>
+      <li><a href="#internals">Orchestration internals</a></li>
+      <li><a href="#tools">MCP tool reference</a></li>
+      <li><a href="#skills">Skills</a></li>
+      <li><a href="#flow">End-to-end flow</a></li>
+      <li><a href="#contract">API contract</a></li>
+      <li><a href="#example">Worked example</a></li>
+      <li><a href="#edge-cases">Edge-case handling</a></li>
+      <li><a href="#loop">How the loop works</a></li>
+      <li><a href="#data">Data surfaces</a></li>
+      <li><a href="#open-items">Open items</a></li>
+    </ol>
+  </nav>
+
+  <main id="main">
+
+    <section id="what">
+      <div class="sec-head"><span class="num">01</span><h2>What the agent does</h2></div>
+      <p>The VP Agent turns a plain-English telecom audience request — <em>“Omani nationals with smartphones who recharged more than 5 OMR in the last 30 days”</em> — into a validated <code>PARENT_CONDITION</code>: the Virtual Profile (VP) condition syntax executed by the downstream campaign/audience platform, for clients <code>omantel</code> and <code>airtel</code>.</p>
+      <p class="lede">It is deliberately <strong>not</strong> a deterministic rules engine. Two hard invariants, from <code>AGENTS.md</code> and <code>.claude/CLAUDE.md</code>, govern everything below:</p>
+      <ul class="invariants">
+        <li><span class="idx">1</span><span>VP condition syntax is only ever written inside the <code>render_condition</code> tool call — never hand-typed by the model anywhere else.</span></li>
+        <li><span class="idx">2</span><span>Routing, rendering, validation, and metadata lookup are deterministic tool outputs. The model owns interpretation: decomposing the request, resolving ambiguity, choosing columns/tables/operators, deciding what to retry.</span></li>
+      </ul>
+      <p>Business knowledge — which column to prefer, how to phrase a clarification, what “high value” might mean — lives in <strong>skills</strong>, <strong>reviewed memory</strong> (golden cases, past production VPs), and <strong>seed metadata</strong>. It does not live in Python <code>if</code> branches.</p>
+    </section>
+
+    <section id="glossary">
+      <div class="sec-head"><span class="num">02</span><h2>Glossary</h2></div>
+      <p class="lede">Start here if you're new — the rest of the document assumes these terms.</p>
+      <dl class="glossary">
+        <div><dt>VP</dt><dd>Virtual Profile — the downstream platform's rule format for “which customers belong in this segment.”</dd></div>
+        <div><dt>PARENT_CONDITION</dt><dd>The actual condition string the platform executes, e.g. <code>TOTAL_RECHARGE_30D ${operator} ${value}</code>. Every VP is, at bottom, one of these strings — the only output this project may hand-write, and only inside <code>render_condition</code>.</dd></div>
+        <div><dt>Slot</dt><dd>A structured field pulled from the sentence — KPI phrase, filters, time token, operator/value, domain, aggregate intent. The agent's working model of “what was asked,” before any column or table is chosen.</dd></div>
+        <div><dt>KPI</dt><dd>Key Performance Indicator — a named metric column (recharge amount, data usage, handset type…) the platform can filter or aggregate on.</dd></div>
+        <div><dt>Seed</dt><dd>A reviewed template for a <code>PARENT_CONDITION</code> that already encodes the right aggregate function, null guards, and <code>__groupby_</code> structure for a class of request. Rendering usually fills in a seed rather than composing from nothing.</dd></div>
+        <div><dt>Variant 1 / 2 / 3</dt><dd>Three rule shapes. <strong>1</strong> — single table, no join. <strong>2</strong> — multiple tables, filters resolved first, aggregate KPI last. <strong>3</strong> — a metric comparison between two explicit periods (uplift, downlift, % change).</dd></div>
+        <div><dt>MCP tool</dt><dd>A tool exposed over the Model Context Protocol. This project's own tools are namespaced <code>mcp__vp__*</code> and implemented in <code>vp_agent/server.py</code> + <code>vp_agent/tools/*.py</code>.</dd></div>
+        <div><dt>Skill</dt><dd>A markdown file under <code>.claude/skills/</code> carrying procedural or business knowledge, loaded into context on demand rather than hard-coded.</dd></div>
+        <div><dt>Subagent</dt><dd>A separate, more narrowly-scoped SDK session the orchestrator launches mid-request — here, the <code>verifier</code> — with its own tool/skill restrictions and turn budget.</dd></div>
+        <div><dt>Hook</dt><dd>A deterministic Python callback wired into the SDK session (<code>PreToolUse</code>, <code>PostToolUse</code>, <code>Stop</code>) that runs around every tool call without going through the model.</dd></div>
+        <div><dt>Harness</dt><dd>The scaffolding — options, tools, hooks, prompt — wrapped around the LLM session so it behaves reliably. Full breakdown in §03.</dd></div>
+        <div><dt>ToolState</dt><dd>The one shared, mutable record (<code>vp_agent/schemas.py</code>) both hooks and the API read and write for a single request.</dd></div>
+      </dl>
+    </section>
+
+    <section id="harnesses">
+      <div class="sec-head"><span class="num">03</span><h2>Harnesses</h2></div>
+      <p class="lede">“Harness” means the deterministic scaffolding around an LLM session — options, tools, hooks, prompt. One runs live; three more exercise it offline, from different angles.</p>
+      <div class="table-wrap">
+        <table>
+          <caption>Four harnesses</caption>
+          <thead><tr><th>#</th><th>Harness</th><th>Files</th><th>Role</th></tr></thead>
+          <tbody>
+            <tr class="row-accent">
+              <td class="mono">1</td>
+              <td><strong>Orchestration</strong><br><span class="pill ok">live</span></td>
+              <td class="mono">orchestrator.py · hooks.py · schemas.py · server.py · settings.json</td>
+              <td>Runs one Claude Agent SDK session per incoming request: extraction → retrieval → resolution → render → validate → optional verify. The harness <code>HARNESS_FIXES.md</code> documents fixes for.</td>
+            </tr>
+            <tr>
+              <td class="mono">2</td>
+              <td>Syntax-coverage audit</td>
+              <td class="mono">scripts/audit_syntax_coverage.py</td>
+              <td>Offline, no LLM calls. Confirms the skills under <code>.claude/skills</code> — the agent's only procedural memory — actually cover the syntax constructs seen in real production VPs.</td>
+            </tr>
+            <tr>
+              <td class="mono">3</td>
+              <td>Live agentic eval</td>
+              <td class="mono">scripts/eval_agentic.py</td>
+              <td>Drives the real orchestration harness against a labeled CSV of sentence → expected-condition pairs. Needed because agentic output varies run to run.</td>
+            </tr>
+            <tr>
+              <td class="mono">4</td>
+              <td>Baseline-vs-optimized regression</td>
+              <td class="mono">scripts/compare_vp_variants.py</td>
+              <td>Health-checks two live API deployments (e.g. ports 8000 / 8001, via <code>VP_VARIANT</code>) and runs identical cases through both, to compare a baseline build against an optimized one.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Extraction, routing, rendering, and validation are <strong>not</strong> separate harnesses — they are pipeline stages inside the one orchestration harness, driven by a single SDK session.</p>
+      <p><strong>Entry points</strong> into the orchestration harness: CLI (<code>vp_agent/cli.py</code>) and API (<code>POST /vp/build</code> in <code>vp_agent/api.py</code>) both call <code>orchestrator.run_request</code>; both are launched via <code>scripts/run_api.sh</code>.</p>
+      <div class="callout danger">
+        <div class="label">Security note</div>
+        <p><code>scripts/run_api.sh</code> currently has a live-looking OAuth token committed in plaintext (plus a second, commented-out one). Rotate it and move it to an untracked env file — flagged here since it surfaced during this review, separate from the architecture write-up itself.</p>
+      </div>
+    </section>
+
+    <section id="internals">
+      <div class="sec-head"><span class="num">04</span><h2>Orchestration internals</h2></div>
+
+      <h3><code>orchestrator.py</code></h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Function</th><th>Role</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">ORCHESTRATOR_APPEND</td><td>A large system-prompt append on top of the Claude Code preset prompt — the actual pipeline spec: two-stage skill loading, evidence-gathering rules, decision rules (filters, main KPI, snapshot vs. raw, aggregate, date bounds, ordering), <code>record_resolution</code>, manual template composition, <code>render_condition</code>, <code>validate_rule</code> warning discipline, verifier trigger conditions, clarification-only exit contract.</td></tr>
+            <tr><td class="mono">build_agents()</td><td>Defines exactly one subagent, <code>verifier</code> (<code>.claude/agents/verifier.md</code>), restricted to <code>Skill</code>, <code>Read</code>, <code>mcp__vp__retrieve_existing_vps</code>, <code>mcp__vp__validate_rule</code>, plus skill <code>vp-metrics-comparison</code> only, <code>maxTurns=5</code>. Deliberately denied the orchestrator's own skills so it re-derives the answer independently rather than restating the author's reasoning.</td></tr>
+            <tr><td class="mono">build_options()</td><td>Builds <code>ClaudeAgentOptions</code>: base <code>tools=["Skill","Read","Agent"]</code> (narrowed on purpose — see §07), the 12 <code>mcp__vp__*</code> tools via <code>allowed_tools</code>, <code>disallowed_tools=["Bash"]</code>, <code>skills="all"</code>, hooks, <code>max_turns=25</code> by default.</td></tr>
+            <tr><td class="mono">run_request()</td><td>Stores the real request/client on shared state — so hooks validate against what the user actually asked, not whatever the model echoes back — then streams one <code>ClaudeSDKClient</code> session.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3><code>hooks.py</code> — the enforcement layer</h3>
+      <div class="hooks">
+        <div class="hook-card">
+          <h4>PreToolUse <span class="pill danger">gate</span></h4>
+          <ul>
+            <li>Marks slots resolved once <code>normalize_slots</code> / <code>retrieve_columns</code> / <code>record_resolution</code> has run.</li>
+            <li><strong>Denies <code>render_condition</code></strong> until slots are resolved.</li>
+            <li>ToolSearch loop-breaker: denies a repeated schema search for a tool already available, with an explicit “stop searching, call it directly” message.</li>
+            <li><strong>Denies <code>Agent</code></strong> (verifier launch) until a rule exists; caps any subagent to 3 launches per request.</li>
+          </ul>
+        </div>
+        <div class="hook-card">
+          <h4>PostToolUse <span class="pill neutral">audit</span></h4>
+          <ul>
+            <li>Records every call/response into the shared trace and structured <code>ToolState</code> fields.</li>
+            <li>After <code>retrieve_columns</code>: soft warning if a request word never reached any submitted role.</li>
+            <li>After <code>render_condition</code>: immediately runs <code>validate_rule</code> against the real stored request; hard-blocks on errors, surfaces warnings + seed-clause regressions as must-address context.</li>
+            <li>Flags (never trusts) a non-<code>render_condition</code> output that tries to smuggle a <code>parent_condition</code>.</li>
+          </ul>
+        </div>
+        <div class="hook-card">
+          <h4>Stop <span class="pill warn">backstop</span></h4>
+          <ul>
+            <li>Fires at most once per request.</li>
+            <li>If the run is ending with no rendered condition, blocks — forcing either completion or exactly one <code>Clarification question: …</code> line.</li>
+            <li>A run can never silently end with nothing.</li>
+          </ul>
+        </div>
+      </div>
+
+      <h3><code>schemas.py</code> — <code>ToolState</code></h3>
+      <p>A single mutable object shared across the whole request: request/client, slot/render progress flags, resolution, selected seed, validation result, verifier verdict, retrieval/seed audit ids, subagent launch counts, and the full tool-call trace — the audit backbone both hooks and the API read from.</p>
+    </section>
+
+    <section id="tools">
+      <div class="sec-head"><span class="num">05</span><h2>MCP tool reference</h2></div>
+      <p class="lede">Every capability the model has, beyond reading skills and launching the verifier. Each tool wraps a pure-Python function that does no business reasoning — it executes a deterministic lookup or computation and hands evidence back. <code>render_condition</code> is highlighted: it's the one tool allowed to emit syntax.</p>
+      <div class="table-wrap">
+        <table>
+          <caption>12 tools · vp_agent/server.py</caption>
+          <thead><tr><th>Tool</th><th>Module</th><th>What it does</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">normalize_slots</td><td class="mono">tools/normalize.py</td><td>Regex first pass. Returns <em>only</em> mechanical fields — operator, value, time token, filters. Withholds domain/kpi_phrase/aggregate/negation, which require judgment.</td></tr>
+            <tr><td class="mono">retrieve_columns</td><td class="mono">tools/retrieve.py</td><td>Main retrieval call, one batch across metric + filter + time roles. Hybrid rank: 0.5 × BM25-normalized + 0.5 × embedding-normalized char-3-gram cosine, plus metadata/time-window/client-prior tiebreakers. Returns top 5 per role with observed values, production usage, adaptation notes, unexplained terms. Supports paging (page 2/3) on the same <code>audit_id</code> for a genuinely unresolved role.</td></tr>
+            <tr><td class="mono">retrieve_existing_vps</td><td class="mono">tools/retrieve_vps.py</td><td>Ranks previously-approved client VPs by token coverage, name precision, semantic similarity — finds reusable helper VPs, especially both operands of a Variant-3 comparison.</td></tr>
+            <tr><td class="mono">record_resolution</td><td class="mono">server.py (inline)</td><td>Pure audit record of the agent's semantic decision — no logic of its own. Flips the <code>slots_seen</code> gate.</td></tr>
+            <tr><td class="mono">shelf_lookup</td><td class="mono">tools/shelf.py</td><td>Checks whether a single KPI/time-token pair has a precomputed 360 Profile “shelf” KPI.</td></tr>
+            <tr><td class="mono">route_table</td><td class="mono">tools/router.py</td><td>Deterministically routes a domain/token (+ optional KPI group) to a source table. Legacy/compatibility — not in the live <code>allowed_tools</code>; table choice in the live path comes from the retrieved KPI's own <code>group_name</code> instead.</td></tr>
+            <tr><td class="mono">select_seed</td><td class="mono">tools/seed.py</td><td>Scores seed-catalog entries on client, time axis, KPI-axis phrase match, aggregate intent, 360-vs-raw preference. Returns one proposed seed + up to 3 diverse alternatives; flags a weak/one-survivor field via <code>supply.advisory</code>.</td></tr>
+            <tr><td class="mono">build_condition_plan</td><td class="mono">tools/plan.py</td><td>Assembles deterministic <code>render_condition</code> input from slots/columns/route/seed. Legacy/compatibility — not part of the live orchestrator path.</td></tr>
+            <tr class="row-accent"><td class="mono">render_condition</td><td class="mono">tools/render.py</td><td><strong>The only legal emitter of <code>PARENT_CONDITION</code> syntax.</strong> Renders the final string from a seed/template, variables, and resolved filters — everything upstream exists to feed this one call correctly.</td></tr>
+            <tr><td class="mono">validate_rule</td><td class="mono">tools/validate.py</td><td>Structural + semantic check: placeholder discipline, known columns, groupby ordering, unrendered stated numbers, intent cues missing from the rule, shape differences vs. existing production VPs on the same column.</td></tr>
+            <tr><td class="mono">episodic_lookup</td><td class="mono">tools/memory.py</td><td>Looks up reviewed prior human corrections for similar slots/client — a memory surface for recurring mistakes.</td></tr>
+            <tr><td class="mono">queue_correction</td><td class="mono">tools/memory.py</td><td>Queues a marketer/verifier correction for human review before it's trusted as reinforcement.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="skills">
+      <div class="sec-head"><span class="num">06</span><h2>Skills</h2></div>
+      <p class="lede">Skills are the agent's procedural/business memory — markdown files whose frontmatter <code>description</code> doubles as the trigger condition shown to the model.</p>
+      <div class="table-wrap">
+        <table>
+          <caption>7 skills · .claude/skills/</caption>
+          <thead><tr><th>Skill</th><th>Purpose</th><th>Triggered when</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">vp-extraction</td><td>Always loaded first. Parses the request into slots: KPI phrase, filters as predicates (comparison / IN LIST / NOT IN LIST / range / null-presence / pattern), time token, operator/value, domain, aggregate intent, Variant-3 comparison object, clarification discipline.</td><td>Every new request, or re-extraction after a coverage failure.</td></tr>
+            <tr><td class="mono">vp-rendering-rules</td><td>Always loaded first. The emission contract for <code>render_condition</code>: compose the full template yourself, placeholder placement rules, <code>__groupby_</code> syntax, how to read validation warnings, snapshot vs. event date-bound rules.</td><td>Immediately before rendering, and when interpreting validation failures.</td></tr>
+            <tr><td class="mono">vp-table-routing</td><td>Chooses among 360 Profile, summarized/event, profile, recharge, subscriptions, lifecycle, audience-segment tables; multi-table ordering rule.</td><td>After retrieval, before column resolution, when more than one table is plausible.</td></tr>
+            <tr><td class="mono">vp-variant-selection</td><td>Defines Variant 1/2/3 and the seed-selection procedure.</td><td>Rule spans multiple tables, or uses metric/uplift/downlift language.</td></tr>
+            <tr><td class="mono">vp-disambiguation</td><td>Governs when and how to ask one batched, plain-English clarification. Forbids exposing internal column/table/seed names.</td><td>Low candidate confidence, multiple KPI matches, missing required time window, uncertain Variant-3 base.</td></tr>
+            <tr><td class="mono">vp-metrics-comparison</td><td>The reviewed convention for Variant-3 period comparisons: extract both period roles, reuse existing helper VPs by exact name, apply the “Rakesh KT” percentage-decline formula, semantic-verification checklist.</td><td>Explicit period comparison / uplift / downlift / decline / % change / growth / ratio. Also the <em>only</em> skill the verifier may load.</td></tr>
+            <tr><td class="mono">vp-golden-examples</td><td>Reviewed example memory from the UI golden-case dataset: resolver workflow (compare candidates to golden patterns) and verifier workflow (confirm KPI family; snapshot KPIs shouldn't get an added event-date condition).</td><td>Retrieval returns multiple plausible KPI families, or choosing Customer-360-snapshot vs. event-table-with-date-bounds.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p><strong>Supporting, non-skill files:</strong> <code>.claude/agents/verifier.md</code> — the verifier's own prompt, deliberately withheld from the orchestrator's skills (except <code>vp-metrics-comparison</code>) so it reasons independently, always ending with exactly one <code>VERDICT: pass|retry|ask — &lt;reason&gt;</code> line. <code>.claude/settings.json</code> — permission allowlist: <code>Skill</code>, <code>Read</code>, <code>Agent</code>, <code>mcp__vp__*</code> allowed; <code>Bash</code> denied.</p>
+    </section>
+
+    <section id="flow">
+      <div class="sec-head"><span class="num">07</span><h2>End-to-end flow</h2></div>
+      <pre class="mermaid">
+flowchart TD
+    A[POST /vp/build] --> B[orchestrator.run_request]
+    B --> C[Load skills: vp-extraction + vp-rendering-rules]
+    C --> D{Trigger conditions met?}
+    D -->|yes| E[Load vp-disambiguation / vp-variant-selection /\nvp-metrics-comparison / vp-table-routing / vp-golden-examples]
+    D -->|no| F
+    E --> F[normalize_slots]
+    F --> G[retrieve_columns]
+    G --> H{aggregate / formula /\nguard / groupby needed?}
+    H -->|yes| I[select_seed]
+    H -->|no| J
+    I --> J{Variant 3?}
+    J -->|yes| K[retrieve_existing_vps per period]
+    J -->|no| L
+    K --> L[Agent reasons: main KPI, filters,\nsnapshot vs raw, aggregate fn,\ndate bounds, table]
+    L --> M[record_resolution]
+    M --> N[Agent composes full PARENT_CONDITION]
+    N --> O[render_condition]
+    O --> P[validate_rule]
+    P --> Q{Verifier triggers?\nVariant 3 / unresolved warnings /\nweak seed / unexplained terms}
+    Q -->|yes| R[Agent launches verifier subagent]
+    Q -->|no| S[Build VPBuildResponse]
+    R --> T{VERDICT}
+    T -->|retry| N
+    T -->|ask| U[Clarification question]
+    T -->|pass| S
+    S --> V[Client receives JSON]
+    U --> V
+      </pre>
+      <div class="callout">
+        <div class="label">Key gating detail</div>
+        <p>The orchestrator's base tool list is deliberately narrowed to <code>Skill</code>, <code>Read</code>, <code>Agent</code> rather than left as Claude Code's full built-in set. Left unset, and stacked with the 12 <code>mcp__vp__*</code> tools, every tool schema got pushed behind <code>ToolSearch</code> — a weaker model got stuck repeatedly searching without ever calling. Narrowing the base set was the single most consequential harness fix recorded in <code>HARNESS_FIXES.md</code>.</p>
+      </div>
+    </section>
+
+    <section id="contract">
+      <div class="sec-head"><span class="num">08</span><h2>API contract</h2></div>
+      <p class="lede"><code>POST /vp/build</code> · <code>vp_agent/api.py</code></p>
+      <h3>Request</h3>
+      <pre><code>{
+  "client": "omantel",
+  "sentence": "Omani nationals with smartphones who recharged more than 5 OMR in the last 30 days",
+  "request_id": "optional-caller-supplied-id",
+  "session_id": "optional",
+  "user_id": "optional"
+}</code></pre>
+      <h3>Response — key fields</h3>
+      <pre><code>{
+  "ok": true,
+  "mode": "agent",
+  "orchestrator_model": "claude-sonnet-5",
+  "subagent_model": "claude-haiku-4-5-20251001",
+  "parent_condition": "TOTAL_RECHARGE_30D ${operator} ${value}",
+  "selected_columns": ["TOTAL_RECHARGE_30D", "NATIONALITY", "DEVICE_TYPE"],
+  "selected_vps": [],
+  "seed": "seed_id_used",
+  "snapshot": false,
+  "slots": { "…": "normalized slots" },
+  "validation": { "errors": [], "warnings": [] },
+  "verifier_verdict": { "decision": "pass", "reason": "…" },
+  "needs_clarification": false,
+  "clarification_question": null,
+  "warnings": []
+}</code></pre>
+      <p>If the agent can't produce a rule: <code>ok=false</code>, <code>parent_condition=null</code>, and either <code>needs_clarification=true</code> with a question, or a <code>failure_reason</code> plus <code>diagnostics</code> naming exactly which tools ran and why extraction from the transcript failed. <code>_build_agentic</code> never lets the caller receive a silently empty success.</p>
+      <p><code>GET /health</code> and <code>GET /observability</code> (Langfuse status, active variant) are also exposed for operational checks.</p>
+    </section>
+
+    <section id="example">
+      <div class="sec-head"><span class="num">09</span><h2>Worked example</h2></div>
+      <p class="lede">“Omani nationals with smartphones who recharged more than 5 OMR in the last 30 days,” client <code>omantel</code>.</p>
+      <ol class="steps">
+        <li><b>Skills load</b> — <code>vp-extraction</code>, <code>vp-rendering-rules</code> always; <code>vp-table-routing</code> too, since recharge vs. profile tables are both plausible.</li>
+        <li><b>normalize_slots</b> — mechanical fields only: <code>operator: "&gt;"</code>, <code>value: 5</code>, <code>time_token: "CurrentTime-30DAYS"</code>. KPI phrase, domain, and the two filters are left for the model.</li>
+        <li><b>retrieve_columns</b> (one batched call) — top candidates per role: a recharge-amount metric column, a nationality filter column, a device-type filter column, each with observed values and production usage counts.</li>
+        <li><b>Model reasons</b> — main KPI = recharge amount aggregate; filters = nationality "Oman", device type "Smartphone"; window = rolling 30 days (not a completed month) → <code>CurrentTime-30DAYS</code>; table = the recharge KPI's own <code>group_name</code>.</li>
+        <li><b>select_seed</b> (aggregate + time window needed) — proposes a seed for “aggregate metric over rolling N days, subscriber-level.”</li>
+        <li><b>record_resolution</b> — audit record of the decision above; flips <code>slots_seen = True</code>, unlocking <code>render_condition</code>.</li>
+        <li><b>render_condition</b> — model composes the full template by hand, emits <code>TOTAL_RECHARGE_30D ${operator} ${value}</code> with the filters folded in. The <code>PostToolUse</code> hook immediately runs <code>validate_rule</code> against the real sentence — no errors; a <code>coverage</code> warning would only fire if “5 OMR” never reached a placeholder, and here it does.</li>
+        <li><b>validate_rule</b> — the model's own closing check: clean.</li>
+        <li><b>Verifier check</b> — no Variant-3 language, no unresolved warnings, no weak seed signal <span class="pill neutral">verifier not required</span> — the model finishes directly.</li>
+        <li><b>Stop hook</b> — sees <code>render_seen = True</code>, does nothing.</li>
+        <li><b>Response</b> — <code>api.py</code> extracts <code>parent_condition</code> from <code>ToolState</code>, returns <code>ok: true</code>.</li>
+      </ol>
+      <div class="callout warn">
+        <div class="label">If “high-value customers” had been the ask instead</div>
+        <p>Step 4 fails to resolve which threshold "high-value" means. <code>vp-disambiguation</code> triggers one batched clarification — e.g. <em>“By 'high-value', do you mean total recharge above a specific amount, or top-tier tariff plan customers?”</em> — instead of a guessed rule. The <code>Stop</code> hook requires at least one retrieval call to have run first, so the agent must check whether “high-value” already resolves cleanly before asking.</p>
+      </div>
+    </section>
+
+    <section id="edge-cases">
+      <div class="sec-head"><span class="num">10</span><h2>Edge-case handling</h2></div>
+      <h3>Retry classes <span class="mono" style="font-size:.7em; color:var(--mute);">— AGENTS.md</span></h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Failure</th><th>Response</th></tr></thead>
+          <tbody>
+            <tr><td>Column / coverage</td><td>Re-call <code>retrieve_columns</code> with the failed column added to <code>exclude</code>.</td></tr>
+            <tr><td>Routing / date</td><td>Re-derive the table from the retrieved KPI's group, with corrected slots.</td></tr>
+            <tr><td>Render / grammar</td><td>Treated as a code bug, never hand-patched — must re-emit through <code>render_condition</code>.</td></tr>
+            <tr><td>Ambiguity</td><td>Exactly one batched, plain-English clarification question, no internal names exposed.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Data question vs. intent question</h3>
+      <p><code>vp-disambiguation</code> draws one line: a <strong>data question</strong> is answerable via <code>retrieve_columns</code> / <code>retrieve_existing_vps</code> and is <em>never</em> asked of the user. An <strong>intent question</strong> is genuinely ambiguous between two equally-supported readings — the only kind allowed to reach the user. The <code>Stop</code> hook enforces that no clarification is issued before at least one retrieval call has actually run.</p>
+
+      <h3>Layered validation</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Layer</th><th>Checks</th></tr></thead>
+          <tbody>
+            <tr><td><span class="pill neutral">1 · render-time</span></td><td>Hook, immediately after <code>render_condition</code>. Hard errors block; warnings and seed-clause regressions (a dropped null guard, <code>__groupby_</code>, or aggregate function) surface as must-address context, checked against the real stored request.</td></tr>
+            <tr><td><span class="pill neutral">2 · validate_rule</span></td><td>Agent-invoked closing step. Structural errors (placeholder count/adjacency, groupby ordering, unknown columns) plus three advisory classes: <code>coverage</code> (a stated number never rendered), <code>intent</code> (negation / per-entity / average / alternation / category-value / scope cues absent from the rule), <code>convention</code> (a same-column production VP uses a different shape).</td></tr>
+            <tr><td><span class="pill warn">3 · verifier</span></td><td>Conditional, independent second opinion — triggered deterministically, never by the model's own confidence — for Variant-3 comparisons, unresolved warnings, a weak seed, or unexplained retrieval terms. Ends with one <code>VERDICT</code> line; <code>retry</code> sends the agent back to re-render and re-validate, <code>ask</code> forces a clarification instead of a rule.</td></tr>
+            <tr><td><span class="pill danger">4 · Stop backstop</span></td><td>Guarantees a run can never silently end with neither a rule nor a clarification.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Retrieval-time edge cases are handled by <em>surfacing</em> evidence rather than dropping it: weaker candidates keep visible adaptation notes instead of being deleted, <code>unexplained_terms</code> flags a filter phrase that may need splitting, <code>production_uses</code> breaks ties between columns sharing identical metadata, and <code>unaddressed_request_terms</code> catches a whole phrase that never became a role at all.</p>
+    </section>
+
+    <section id="loop">
+      <div class="sec-head"><span class="num">11</span><h2>How the loop works</h2></div>
+      <p class="lede">There is no bespoke <code>while</code> loop in this codebase. The loop <em>is</em> the Claude Agent SDK's own agentic turn loop — tool call ⇄ model reasoning, up to <code>max_turns = 25</code>. The harness's job is to <em>shape</em> that loop via hooks and prompt, not replace it.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Loop</th><th>Mechanism</th></tr></thead>
+          <tbody>
+            <tr><td>Turn loop</td><td><code>ClaudeSDKClient.query()</code> + <code>receive_response()</code> streams messages; the model chooses each tool call; PreToolUse/PostToolUse fire around every call; ends on final text or at <code>max_turns</code>.</td></tr>
+            <tr><td>Gating loop</td><td>PreToolUse blocks premature <code>render_condition</code> and premature verifier launch; breaks a ToolSearch fetch-without-call stall after one grace retry.</td></tr>
+            <tr><td>Evidence/audit loop</td><td>PostToolUse folds every structured output into shared state, and select roles get one-shot warning injections the model must react to next turn — closing the loop on silent omissions without hard-blocking an in-progress chain.</td></tr>
+            <tr><td>Termination loop</td><td>Stop hook fires at most once per request — one corrective turn, never an infinite spin.</td></tr>
+            <tr><td>Verify-and-retry sub-loop</td><td><code>retry</code> verdict → revise → re-render → re-validate → optionally re-verify, bounded by <code>max_turns</code>, the subagent's own <code>maxTurns=5</code>, and a 3-launches-per-agent cap.</td></tr>
+            <tr><td>Pagination "loop"</td><td><code>retrieve_columns</code> / <code>select_seed</code> return top 5 by default; the model may fetch further pages of the <em>same</em> audit only for a genuinely unresolved role — bounded, explicitly gated, not a free retry.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <h3>State-machine view of the gates</h3>
+      <pre class="mermaid">
+stateDiagram-v2
+    [*] --> SlotsUnresolved
+    SlotsUnresolved --> SlotsResolved: normalize_slots / retrieve_columns / record_resolution
+    SlotsResolved --> RenderBlocked: render_condition attempted early (denied)
+    SlotsResolved --> RuleRendered: render_condition succeeds, no errors
+    RuleRendered --> VerifierOptional: verifier not required
+    RuleRendered --> VerifierRequired: Variant 3 / warnings / weak seed / unexplained terms
+    VerifierRequired --> RuleRendered: VERDICT retry
+    VerifierRequired --> Finished: VERDICT pass or ask
+    VerifierOptional --> Finished
+    SlotsResolved --> Finished: Stop hook forces one clarification if no rule was ever rendered
+    Finished --> [*]
+      </pre>
+    </section>
+
+    <section id="data">
+      <div class="sec-head"><span class="num">12</span><h2>Data surfaces</h2></div>
+      <p class="lede">Referenced by <code>AGENTS.md</code>, loaded via <code>vp_agent/data.py</code>. Data root is <code>VP_DATA_DIR</code>, outside this repo at <code>../Virtual_profile_agent/data</code>.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>File</th><th>Feeds</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">kpi_meta.csv</td><td>Canonical column/profile metadata.</td></tr>
+            <tr><td class="mono">vpdesc-all-&lt;client&gt;.csv</td><td>Historical production VP conditions per client — usage stats, observed values, existing-VP retrieval, convention checks.</td></tr>
+            <tr><td class="mono">vp_seed_catalog_with_selection_metadata.json</td><td>The seed/template catalog consumed by <code>select_seed</code>.</td></tr>
+            <tr><td class="mono">golden_case.csv</td><td>Reviewed UI golden cases — feeds <code>vp-golden-examples</code> and the golden-case eval script.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="open-items">
+      <div class="sec-head"><span class="num">13</span><h2>Open items</h2></div>
+      <div class="callout danger">
+        <div class="label">Rotate before next deploy</div>
+        <p><code>scripts/run_api.sh</code> has a live-looking OAuth token committed in plaintext. Move it to an untracked env file.</p>
+      </div>
+      <div class="callout warn">
+        <div class="label">Confirm intentional</div>
+        <p><code>run_api.sh</code> pins <code>VP_ORCHESTRATOR_MODEL=claude-haiku-4-5</code> while <code>vp_agent/config.py</code> defaults to <code>claude-sonnet-5</code> — worth confirming that divergence is deliberate rather than a stale override.</p>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<footer>
+  vp_agent_codex / docs / ARCHITECTURE.md — see the repo for the source Markdown this page mirrors.
+</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.9.1/mermaid.min.js"></script>
+<script>
+  mermaid.initialize({
+    startOnLoad: true,
+    securityLevel: "loose",
+    theme: window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "default"
+  });
+</script>
+</body>
+</html>

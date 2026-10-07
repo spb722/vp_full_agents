@@ -26,6 +26,14 @@ SYNONYMS = {
     "spent": ["revenue", "amount"],
     "active": ["status", "activity"],
     "pack": ["bundle", "product", "subscription"],
+    # The client writes a campaign's control-group twin by suffixing the action
+    # key with `_CG`, so the only token in the data is "cg". A marketer says
+    # "control group", and nothing bridged the two: a lookup for
+    # "control group variant" returned streaming-session counts while the four
+    # rules that define the pattern went unseen.
+    "control": ["cg"],
+    "cg": ["control", "group"],
+    "controlgroup": ["cg", "control"],
 }
 
 
@@ -118,15 +126,25 @@ def _candidate_values(condition: str) -> list[tuple[str, str]]:
     return pairs
 
 
+def _usable_value_tokens(value: str) -> list[str]:
+    """Real category words: no numbers, date fragments, or engine keywords."""
+    return [
+        token
+        for token in tokens(value)
+        if not token[0].isdigit() and token not in NON_VALUE_TOKENS and len(token) >= 2
+    ]
+
+
 @lru_cache(maxsize=1)
-def column_value_vocabulary() -> dict[str, tuple[str, ...]]:
-    """Literal values each column has actually been compared against.
+def column_observed_values() -> dict[str, tuple[str, ...]]:
+    """Literal values each column has been compared against, casing preserved.
 
     `kpi_meta.value_references` is sparse — `Profile_Cdr_Nationality` records
-    "NONE" — so a marketer word like "Indian" has no lexical path to its column
-    and retrieval cannot find it. Reviewed golden cases and production VPs
-    already contain `Profile_Cdr_Nationality = Indian`, so mine the vocabulary
-    from the rules the business has actually written.
+    "NONE" and the handset column omits iPhone — so a categorical column's legal
+    values are often invisible. Production rules already carry them, including
+    their exact spelling: `LC_ACTION_TYPE` is stored with inconsistent casing,
+    which is why every production rule matches it as a membership list rather
+    than a single equality.
     """
     known = {row.feature_name for row in load_kpi_meta()}
     conditions: list[str] = []
@@ -142,19 +160,27 @@ def column_value_vocabulary() -> dict[str, tuple[str, ...]]:
     except (OSError, ValueError, ImportError):
         pass
 
-    vocabulary: defaultdict[str, set[str]] = defaultdict(set)
+    observed: defaultdict[str, set[str]] = defaultdict(set)
     for condition in conditions:
         for column, value in _candidate_values(condition):
-            if column not in known:
+            text = value.strip()
+            if column not in known or not _usable_value_tokens(text):
                 continue
-            for token in tokens(value):
-                # Keep real category words: skip numbers, engine keywords, and
-                # column-to-column comparisons.
-                # Skip numbers, date-anchor fragments like "30days", and engine
-                # keywords; keep only real category words.
-                if token[0].isdigit() or token in NON_VALUE_TOKENS or len(token) < 2:
-                    continue
-                vocabulary[column].add(token)
+            observed[column].add(text)
+    return {column: tuple(sorted(values)) for column, values in observed.items()}
+
+
+@lru_cache(maxsize=1)
+def column_value_vocabulary() -> dict[str, tuple[str, ...]]:
+    """Lowercased search tokens for those values, so retrieval can match them.
+
+    Without this a marketer word like "Indian" has no lexical path to
+    `Profile_Cdr_Nationality` at all.
+    """
+    vocabulary: defaultdict[str, set[str]] = defaultdict(set)
+    for column, values in column_observed_values().items():
+        for value in values:
+            vocabulary[column].update(_usable_value_tokens(value))
     return {column: tuple(sorted(values)) for column, values in vocabulary.items()}
 
 
@@ -200,6 +226,111 @@ def build_retrieval_index() -> RetrievalIndex:
 
     avgdl = total_length / max(len(documents), 1)
     return RetrievalIndex(tuple(documents), dict(doc_freq), avgdl)
+
+
+@lru_cache(maxsize=8)
+def client_column_usage(client: str) -> dict[str, int]:
+    """How many of the client's production VPs use each column.
+
+    `client_column_prior` answers only "ever used?", and that cannot separate two
+    columns documented identically. `L_AGG_MSISDN` and `L_AGG_CNT` share a
+    description word for word, so a binary prior gave both the same evidence and
+    the lexically closer name won — even though production uses one of them in
+    50 rules and the other in 4.
+    """
+    try:
+        rows = load_vp_descriptions(client)
+    except (OSError, ValueError):
+        return {}
+
+    known = {row.feature_name for row in load_kpi_meta()}
+    counts: Counter[str] = Counter()
+    for row in rows:
+        condition = row.get("PARENT_CONDITION", "")
+        # Per rule, not per mention: "used by 50 VPs" is the useful signal, and
+        # a column repeated inside one condition is still one rule.
+        counts.update({token for token in COLUMN_RE.findall(condition) if token in known})
+    return dict(counts)
+
+
+AGGREGATED_ROLE_RE = re.compile(r"\b(?:SUM|COUNT_ALL|AVG|MAX|MIN)\(\s*([A-Za-z][A-Za-z0-9_]*)\s*\)")
+PAIR_OWNER_ROLE_RE = re.compile(
+    r"((?:SUM|COUNT_ALL|AVG|MAX|MIN)\([^)]*\)(?:__groupby_[A-Za-z0-9_,]+)?|[A-Za-z][A-Za-z0-9_]*)"
+    r"\s*\$\{operator\}\s*\$\{value\}"
+)
+GROUPBY_ROLE_RE = re.compile(r"__groupby_([A-Za-z0-9_,]+)")
+
+
+@lru_cache(maxsize=8)
+def client_role_usage(client: str) -> dict[str, dict[str, int]]:
+    """How often each column appears in each structural role, per client.
+
+    A bare usage count cannot separate two columns that both appear often but do
+    different jobs. `L_ACTION_KEY` carries `${operator} ${value}` 34 times and is
+    counted 21; `L_AGG_MSISDN` is counted 52 times and carries the pair almost
+    never. Filling a seed's `{key_col}` and `{count_col}` from an undifferentiated
+    pool therefore came down to list order, and one run swapped them.
+
+    Roles: `aggregated` (inside an aggregate call), `pair_owner` (carries the
+    runtime pair), `groupby` (named by a `__groupby_` suffix).
+    """
+    try:
+        rows = load_vp_descriptions(client)
+    except (OSError, ValueError):
+        return {}
+
+    known = {row.feature_name for row in load_kpi_meta()}
+    usage: dict[str, Counter[str]] = {
+        "aggregated": Counter(),
+        "pair_owner": Counter(),
+        "groupby": Counter(),
+    }
+    for row in rows:
+        condition = row.get("PARENT_CONDITION", "")
+        usage["aggregated"].update(
+            {column for column in AGGREGATED_ROLE_RE.findall(condition) if column in known}
+        )
+        owner = PAIR_OWNER_ROLE_RE.search(condition)
+        if owner and "(" not in owner.group(1) and owner.group(1) in known:
+            usage["pair_owner"][owner.group(1)] += 1
+        for match in GROUPBY_ROLE_RE.findall(condition):
+            usage["groupby"].update(
+                {part.strip() for part in match.split(",") if part.strip() in known}
+            )
+    return {role: dict(counter) for role, counter in usage.items()}
+
+
+@lru_cache(maxsize=8)
+def client_selector_for_counted(client: str) -> dict[str, tuple[tuple[str, int], ...]]:
+    """For each counted column, which column production pairs it with.
+
+    When a seed needs a `{key_col}` and the agent supplied no selector, the slot
+    is left empty rather than filled with the metric. That is honest but not
+    useful on its own: the client's own rules already say which selector belongs
+    with a given count. Every production rule counting `L_AGG_MSISDN` puts the
+    runtime pair on `L_ACTION_KEY` (31) or `LC_SEGMENT_NAME` (21).
+    """
+    try:
+        rows = load_vp_descriptions(client)
+    except (OSError, ValueError):
+        return {}
+
+    known = {row.feature_name for row in load_kpi_meta()}
+    pairs: defaultdict[str, Counter[str]] = defaultdict(Counter)
+    for row in rows:
+        condition = row.get("PARENT_CONDITION", "")
+        counted = {c for c in AGGREGATED_ROLE_RE.findall(condition) if c in known}
+        if not counted:
+            continue
+        owner = PAIR_OWNER_ROLE_RE.search(condition)
+        if not owner or "(" in owner.group(1) or owner.group(1) not in known:
+            continue
+        for column in counted:
+            if column != owner.group(1):
+                pairs[column][owner.group(1)] += 1
+    return {
+        column: tuple(counter.most_common(3)) for column, counter in pairs.items()
+    }
 
 
 @lru_cache(maxsize=8)
