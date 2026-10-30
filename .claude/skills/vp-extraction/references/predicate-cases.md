@@ -64,6 +64,21 @@ emitted.)
   line type = prepaid AND handset type = smartphone.
 - "Omani smartphone users" -> nationality = Omani AND handset type = smartphone.
 
+## Branching audiences (different eligibility per segment)
+
+Use this when the request gives different qualifying conditions to different values of the same attribute family, and at least one branch has extra conditions that do not apply to the other branch.
+
+- "postpaid, or prepaid with more than 365 days on the network" -> two eligibility branches, not a flat membership list:
+  - branch 1: line type = postpaid
+  - branch 2: line type = prepaid AND AON > 365.
+- "basic plan, or premium plan with at least 3 purchases" -> two eligibility branches:
+  - branch 1: plan = basic
+  - branch 2: plan = premium AND purchase count >= 3.
+
+Do NOT flatten this into a single column `OR` where one side only looks like a value variant. If one branch has its own baggage, keep that baggage attached to the branch.
+
+Extraction should preserve each branch as a small group of predicates, then let the renderer join the branches at the audience level.
+
 ## Standalone audience via list
 
 When the whole request is "customers who bought product 123 or 125 in the last

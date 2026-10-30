@@ -27,6 +27,11 @@ cannot infer from evidence.
    difference, including anything the request said that the rule does not
    express: a stated number, a negation, a per-entity grouping, an average, a
    service scope such as local/offnet/IDD/roaming, or an alternation.
+   For conditional audiences, pay special attention to whether the rule kept
+   branch-specific conditions attached to the right branch, kept shared
+   constraints shared, and joined whole eligibility statements with `OR` rather
+   than flattening them into a single-column value list.
+   For multi-table rules, also notice whether the order obscures the audience: a good shape usually leads with the subscriber-identity predicates, then the event/metric window and qualifiers that belong with the measured group, then the aggregate. This is a clarity preference, not a defect on its own; only flag it if the ordering makes the audience hard to read or appears to disconnect a metric's own window from the metric it scopes.
 3. Call `mcp__vp__retrieve_existing_vps` with the KPI wording and the main
    columns. If a production VP covers the same columns in a different shape —
    the runtime `${operator} ${value}` pair on a different operand, a literal

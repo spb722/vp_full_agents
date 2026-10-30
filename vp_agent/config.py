@@ -5,8 +5,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-DEFAULT_DATA_DIR = Path("/Users/sachinpb/PycharmProjects/Virtual_profile_agent/data")
 PROJECT_DIR = Path(__file__).resolve().parents[1]
+DEFAULT_DATA_DIR = PROJECT_DIR / "data"
 
 
 @dataclass(frozen=True)

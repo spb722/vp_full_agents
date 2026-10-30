@@ -159,6 +159,17 @@ INTENT_CUES: tuple[IntentCue, ...] = (
         re.compile(r"\bIN\s+LIST\b|\bOR\b", re.I),
         "the request offers alternatives but the rule has no IN LIST or OR; ANDing alternatives for one column always matches nobody",
     ),
+    IntentCue(
+        "branching_audience",
+        # Heuristic: a segment value is named alongside an extra condition on the same attribute family.
+        # Too specific to be a full parser; the point is to make flattening a branching audience visible.
+        re.compile(
+            r"\b(?:postpaid|prepaid|basic|premium|plan|segment|line type|status)\b.*(?:\bor\b.*\band\b|\band\b.*\bor\b)",
+            re.I,
+        ),
+        re.compile(r"\bOR\b"),
+        "the request looks like different eligibility per segment with extra conditions; confirm the rule preserves the branch-specific conditions and does not flatten them into one value list",
+    ),
 )
 
 # scope name -> (how the marketer says it, how a column spells it)
