@@ -15,7 +15,15 @@ if [ ! -d ".venv" ]; then
   "$PYTHON_BIN" -m venv .venv
 fi
 
-. .venv/bin/activate
+# Activate venv across POSIX and Windows bash (Git Bash / WSL)
+if [ -f ".venv/bin/activate" ]; then
+  . .venv/bin/activate
+elif [ -f ".venv/Scripts/activate" ]; then
+  . .venv/Scripts/activate
+else
+  echo "Could not find venv activate script in .venv/bin or .venv/Scripts" >&2
+  exit 1
+fi
 python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
 

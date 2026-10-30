@@ -66,8 +66,10 @@ Not observed in the data. Confirm token and wildcard syntax before enabling.
 - Exactly one predicate in the whole rule carries the runtime
   `${operator} ${value}` pair — that is the main profiled KPI.
 - Filter predicates come before the aggregate; the aggregate is last.
-- Alternatives for the SAME column collapse into ONE membership predicate.
+- Alternatives for the SAME column with no extra conditions collapse into ONE membership predicate.
   Constraints on DIFFERENT columns stay as separate predicates joined by AND.
+- When the request defines a **branching audience** — different values of the same attribute family with different extra conditions — render each branch as its own complete eligibility block and join the branches with `OR` at the audience level. Do not flatten a branch that carries extra conditions into a single-column value list.
+- Use parentheses to make branch boundaries readable: each `OR` branch should read as a self-contained eligibility statement, and shared constraints such as the time window and the measure should stay outside the branching structure.
 - Emit only operators marked **confirmed**. For a **needs-confirmation**
   operator, ask before rendering.
 

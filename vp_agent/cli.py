@@ -3,11 +3,19 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
+from pathlib import Path
+
+from dotenv import load_dotenv
 
 from vp_agent.config import load_settings
 from vp_agent.orchestrator import run_request
 from vp_agent.schemas import ToolState
 from vp_agent.trace import TraceRecorder
+
+
+# Load .env from the project root so the CLI honours the same Ollama-friendly
+# config the FastAPI path picks up via configure_langfuse() + python-dotenv.
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 
 async def _run(args: argparse.Namespace) -> None:

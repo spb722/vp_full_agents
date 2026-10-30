@@ -2,6 +2,7 @@
 .env
 .DS_Store
 __pycache__/
+__MACOSX/
 *.py[cod]
 *.egg-info/
 .pytest_cache/

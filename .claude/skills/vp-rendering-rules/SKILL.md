@@ -311,7 +311,10 @@ Only if no selector exists at all, keep the pair on the aggregate and say plainl
 that the decided comparison becomes the runtime threshold. Never silently drop
 a stated count, and never drop a negation to make room for the pair.
 - Aggregate conditions must be last in multi-table or multi-condition rules.
+- When a rule mixes subscriber attributes with event or subscription attributes, prefer a role-based order: lead with the subscriber-identity predicates (for example profile attributes such as status, line type, nationality, handset, network age), then the event/metric window and any qualifiers that belong with the measured group, then the aggregate. This is a readability and audience-clarity preference, not a grammar rule, and it applies in addition to "filters before aggregate".
+- Do not move the metric's own event-date or event-window predicate to the front just because it is a filter; keep it associated with the metric block it scopes.
 - Use `<> NULL` guards only when the chosen seed/client convention requires it.
+- When the audience is a branching audience, render the branches as complete eligibility blocks, join them with `OR` at the audience level, and keep the shared time window and the measure outside the branching structure. Make parentheses serve the branch boundary, not just tidy up a flat `OR`.
 - Formula names in `V{...}=f{...}` must be unique in the rule.
 - `V{...}=f{...}` is a Variant-1 formula shape. A Variant-3 period metric is an
   exception: reference its helper VP names directly and apply the arithmetic

@@ -31,7 +31,8 @@ def _text_result(data: Any) -> dict[str, Any]:
     }
 
 
-def create_vp_server():
+
+def create_vp_server() -> Any:
     from claude_agent_sdk import create_sdk_mcp_server, tool
 
     # The MCP server is created per VP request. These stores let targeted
